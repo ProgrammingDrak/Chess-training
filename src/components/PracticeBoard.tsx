@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Chessboard } from 'react-chessboard';
 import type { Opening, AppProgress } from '../types';
 import { usePractice } from '../hooks/usePractice';
@@ -36,23 +36,19 @@ export function PracticeBoard({
     startPlayingFromIntro,
   } = usePractice(opening);
 
-  // Start the line if not started yet
-  if (!session) {
+  // Start the line on mount
+  useEffect(() => {
     startLine(startLineIndex);
-    return null;
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startLineIndex]);
 
-  const boardOrientation = opening.learnerColor === 'white' ? 'white' : 'black';
   const isPlayerTurn =
     currentPhase === 'playing' && currentMoveStep?.isLearnerMove === true;
 
   const handlePieceDrop = useCallback(
     (sourceSquare: Square, targetSquare: Square): boolean => {
       if (!isPlayerTurn) return false;
-      const san = `${sourceSquare}${targetSquare}`;
-      // Try the move — also try with promotion to queen
-      const result = submitMove(san) || submitMove(san + 'q');
-      return result;
+      return submitMove(sourceSquare, targetSquare);
     },
     [isPlayerTurn, submitMove],
   );
@@ -62,6 +58,10 @@ export function PracticeBoard({
       onRecordAttempt(opening.id, lineId, firstTry);
     });
   }, [nextLine, onRecordAttempt, opening.id]);
+
+  if (!session) return null;
+
+  const boardOrientation = opening.learnerColor === 'white' ? 'white' : 'black';
 
   const lineProgress = currentLine
     ? progress.lines[currentLine.id]
@@ -243,27 +243,61 @@ export function PracticeBoard({
             )}
 
           {/* All moves in the line — review panel */}
-          {currentLine && (
-            <div className="line-moves-review">
-              <h4>Line Moves</h4>
-              <div className="moves-list">
-                {currentLine.moves.map((move, i) => (
-                  <div
-                    key={i}
-                    className={`move-row ${move.isLearnerMove ? 'learner-move' : 'opponent-move'} ${
-                      i < session.moveIndex ? 'played' : i === session.moveIndex ? 'active' : 'future'
-                    }`}
-                  >
-                    <span className="move-turn">
-                      {move.isLearnerMove ? '▶ You' : '○ Opp'}
-                    </span>
-                    <span className="move-san">{move.san}</span>
-                    <QualityBadge quality={move.quality} size="sm" />
-                  </div>
-                ))}
+          {currentLine && (() => {
+            // Group moves into White/Black pairs
+            const setupCount = opening.setupMoves.length;
+            type PairCell = { move: MoveStep; idx: number };
+            const pairs: { fullMove: number; white: PairCell | null; black: PairCell | null }[] = [];
+            currentLine.moves.forEach((move, i) => {
+              const totalIndex = setupCount + i;
+              const fullMoveNum = Math.floor(totalIndex / 2) + 1;
+              const isBlack = totalIndex % 2 === 1;
+              if (!isBlack) {
+                pairs.push({ fullMove: fullMoveNum, white: { move, idx: i }, black: null });
+              } else {
+                const last = pairs[pairs.length - 1];
+                if (last && last.black === null && last.white !== null) {
+                  last.black = { move, idx: i };
+                } else {
+                  pairs.push({ fullMove: fullMoveNum, white: null, black: { move, idx: i } });
+                }
+              }
+            });
+
+            const cellState = (idx: number) =>
+              idx < session.moveIndex ? 'played' : idx === session.moveIndex ? 'active' : 'future';
+
+            return (
+              <div className="line-moves-review">
+                <h4>Line Moves</h4>
+                <div className="moves-list">
+                  {pairs.map(({ fullMove, white, black }) => (
+                    <div key={fullMove} className="move-pair-row">
+                      <span className="move-pair-num">{fullMove}.</span>
+                      <div className={`move-pair-cell ${white ? `${cellState(white.idx)} ${white.move.isLearnerMove ? 'learner-move' : 'opponent-move'}` : 'ellipsis-cell'}`}>
+                        {white ? (
+                          <>
+                            <span className="move-cell-indicator">{white.move.isLearnerMove ? '▶' : '○'}</span>
+                            <span className="move-san">{white.move.san}</span>
+                            <QualityBadge quality={white.move.quality} size="sm" />
+                          </>
+                        ) : <span className="move-ellipsis">…</span>}
+                      </div>
+                      <div className={`move-pair-cell ${black ? `${cellState(black.idx)} ${black.move.isLearnerMove ? 'learner-move' : 'opponent-move'}` : ''}`}>
+                        {black && (
+                          <>
+                            <span className="move-cell-indicator">{black.move.isLearnerMove ? '▶' : '○'}</span>
+                            <span className="move-san">{black.move.san}</span>
+                            <QualityBadge quality={black.move.quality} size="sm" />
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </div>
     </div>

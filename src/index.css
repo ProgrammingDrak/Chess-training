@@ -864,39 +864,58 @@ button {
 .moves-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
-.move-row {
+.move-pair-row {
+  display: grid;
+  grid-template-columns: 28px 1fr 1fr;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.82rem;
+}
+
+.move-pair-num {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-align: right;
+  padding-right: 2px;
+}
+
+.move-pair-cell {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
+  gap: 5px;
+  padding: 3px 6px;
   border-radius: 4px;
-  font-size: 0.82rem;
   transition: background 0.1s;
 }
 
-.move-row.played { opacity: 0.5; }
-.move-row.active { background: var(--bg-4); }
-.move-row.future { opacity: 0.35; }
+.move-pair-cell.played { opacity: 0.45; }
+.move-pair-cell.active { background: var(--bg-4); }
+.move-pair-cell.future { opacity: 0.3; }
+.move-pair-cell.ellipsis-cell { opacity: 0.3; }
 
-.move-row.learner-move .move-turn { color: var(--accent-hover); }
-.move-row.opponent-move .move-turn { color: var(--text-muted); }
+.move-pair-cell.learner-move .move-cell-indicator { color: var(--accent-hover); }
+.move-pair-cell.opponent-move .move-cell-indicator { color: var(--text-muted); }
 
-.move-turn {
-  font-size: 0.72rem;
-  font-weight: 600;
-  min-width: 40px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+.move-cell-indicator {
+  font-size: 0.65rem;
+  width: 10px;
+  flex-shrink: 0;
+}
+
+.move-ellipsis {
+  color: var(--text-muted);
+  font-family: var(--mono);
 }
 
 .move-san {
   font-family: var(--mono);
   font-weight: 600;
   color: var(--text-primary);
-  min-width: 40px;
+  min-width: 36px;
 }
 
 /* ── Dashboard ───────────────────────────────────────────── */

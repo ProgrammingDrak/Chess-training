@@ -10,6 +10,7 @@ export const italianGame: Opening = {
   description:
     "One of the oldest openings in chess. White develops the bishop to c4 targeting the f7 pawn and the center. The Italian Game has seen a massive revival in modern chess — Magnus Carlsen uses it extensively. The positions are rich with long-term strategic ideas.",
   tags: ['classical', 'strategic', 'bishop pair', 'e4'],
+  setupMoves: ['e4', 'e5', 'Nf3', 'Nc6', 'Bc4'],
   lines: [
     // ──────────────────────────────────────────────
     // 1. Giuoco Piano — classical main line

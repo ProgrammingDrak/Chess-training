@@ -11,6 +11,7 @@ export const queensGambit: Opening = {
   description:
     "White offers a pawn sacrifice on move 2 to gain central control. One of the oldest and most respected openings in chess, played at the highest levels for over a century. As Black, your goal is to maintain the center, develop actively, and neutralize White's space advantage.",
   tags: ['classical', 'positional', 'd4', 'central control'],
+  setupMoves: ['d4', 'd5', 'c4'],
   lines: [
     // ──────────────────────────────────────────────
     // 1. Orthodox QGD — best White play

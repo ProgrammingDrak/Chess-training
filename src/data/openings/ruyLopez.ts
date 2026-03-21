@@ -10,6 +10,7 @@ export const ruyLopez: Opening = {
   description:
     "The most classical and prestigious 1.e4 opening. By playing Bb5, White pins the knight that defends e5. White doesn't win the pawn immediately but creates long-term pressure. This opening has been used in virtually every World Chess Championship match.",
   tags: ['classical', 'positional', 'long-term pressure', 'e4'],
+  setupMoves: ['e4', 'e5', 'Nf3', 'Nc6', 'Bb5'],
   lines: [
     // ──────────────────────────────────────────────
     // 1. Morphy Defense — the main line
@@ -504,10 +505,10 @@ export const ruyLopez: Opening = {
           explanation: "Black pushes d5, trying to challenge your center.",
         },
         {
-          san: 'Nxd5',
+          san: 'Nxe5',
           isLearnerMove: true,
           quality: 'best',
-          explanation: "Capture the d5 pawn — you're up a pawn with great activity.",
+          explanation: "Capture the e5 pawn with the knight — you win material and have the initiative.",
         },
         {
           san: 'Nf6',

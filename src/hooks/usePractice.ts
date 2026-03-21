@@ -2,9 +2,9 @@ import { useState, useCallback, useMemo } from 'react';
 import { Chess } from 'chess.js';
 import type { Opening, OpeningLine, PracticeSession, PracticePhase } from '../types';
 
-function buildFenHistory(moves: string[]): string {
+function buildFenHistory(setupMoves: string[], lineMoves: string[]): string {
   const chess = new Chess();
-  for (const move of moves) {
+  for (const move of [...setupMoves, ...lineMoves]) {
     try {
       chess.move(move);
     } catch {
@@ -31,8 +31,8 @@ export function usePractice(opening: Opening | null) {
 
   const currentFen = useMemo(() => {
     if (!session) return 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-    return buildFenHistory(session.moveHistory);
-  }, [session]);
+    return buildFenHistory(opening?.setupMoves ?? [], session.moveHistory);
+  }, [session, opening]);
 
   const startLine = useCallback(
     (lineIndex: number) => {
@@ -81,29 +81,46 @@ export function usePractice(opening: Opening | null) {
   );
 
   const submitMove = useCallback(
-    (san: string): boolean => {
+    (from: string, to: string): boolean => {
       if (!session || !currentLine || !currentMoveStep) return false;
       if (!currentMoveStep.isLearnerMove) return false;
 
-      const isCorrect =
-        san.toLowerCase() === currentMoveStep.san.toLowerCase();
+      // Rebuild the position and convert coordinate move to SAN
+      const chess = new Chess();
+      for (const moveSan of [...(opening?.setupMoves ?? []), ...session.moveHistory]) {
+        chess.move(moveSan);
+      }
+
+      let actualSan: string;
+      try {
+        const result = chess.move({ from, to, promotion: 'q' });
+        actualSan = result.san;
+      } catch {
+        // Illegal move
+        setSession((prev) =>
+          prev ? { ...prev, phase: 'incorrect', wrongGuess: `${from}-${to}` } : null,
+        );
+        setFirstTryCorrect(false);
+        return false;
+      }
+
+      const isCorrect = actualSan === currentMoveStep.san;
 
       if (isCorrect) {
         const nextMoveIndex = session.moveIndex + 1;
-        let next: PracticeSession = {
+        const next: PracticeSession = {
           ...session,
           moveHistory: [...session.moveHistory, currentMoveStep.san],
           moveIndex: nextMoveIndex,
           phase: 'correct',
           wrongGuess: null,
         };
-
         setSession(next);
         setFirstTryCorrect((prev) => prev && true);
         return true;
       } else {
         setSession((prev) =>
-          prev ? { ...prev, phase: 'incorrect', wrongGuess: san } : null,
+          prev ? { ...prev, phase: 'incorrect', wrongGuess: actualSan } : null,
         );
         setFirstTryCorrect(false);
         return false;

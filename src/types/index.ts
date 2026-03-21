@@ -34,6 +34,7 @@ export interface Opening {
   learnerColor: 'white' | 'black';
   description: string;
   tags: string[];
+  setupMoves: string[]; // Moves from starting position to where lines begin
   lines: OpeningLine[]; // Ordered: best opponent lines first, worst last
 }
 
