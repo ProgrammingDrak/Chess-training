@@ -11,6 +11,7 @@ export const sicilianDefense: Opening = {
   description:
     "The most popular response to 1.e4. Black fights for the center asymmetrically with 1…c5, avoiding 1…e5 symmetry and aiming for counterplay. As White, you need to understand both the Open Sicilian (2.Nf3 + 3.d4) and the various Anti-Sicilian options. The Sicilian leads to the sharpest, most complex positions in chess.",
   tags: ['sharp', 'dynamic', 'e4', 'counterattack'],
+  setupMoves: ['e4', 'c5'],
   lines: [
     // ──────────────────────────────────────────────
     // 1. Najdorf Variation — sharpest and most theoretical
@@ -170,10 +171,10 @@ export const sicilianDefense: Opening = {
             "After f3, the plan is Qd2, O-O-O, g4, h4–h5–h6. You're attacking on the h-file while Black uses the c-file and open center. The person who delivers checkmate first wins. NEVER play Bc4 — it gets hit by …d5.",
         },
         {
-          san: 'O-O',
+          san: 'Nf6',
           isLearnerMove: false,
-          quality: 'good',
-          explanation: "Black castles kingside, walking into your attack.",
+          quality: 'best',
+          explanation: "Black develops the knight, clearing g8 and preparing to castle.",
         },
         {
           san: 'Qd2',
@@ -183,6 +184,12 @@ export const sicilianDefense: Opening = {
             "Prepare to castle queenside. The queen connects your rooks and prepares Bc4 or Bh6 ideas.",
           strategicNote:
             "After O-O-O, the attack begins: g4, h4, h5, h6 — or Bh6 to exchange the Dragon bishop. Without the g7-bishop, Black's attack collapses. Keep pressing!",
+        },
+        {
+          san: 'O-O',
+          isLearnerMove: false,
+          quality: 'good',
+          explanation: "Black castles kingside, walking into your attack.",
         },
       ],
     },
@@ -231,10 +238,10 @@ export const sicilianDefense: Opening = {
           explanation: "Recapture and dominate the center.",
         },
         {
-          san: 'Nc6',
+          san: 'Nf6',
           isLearnerMove: false,
           quality: 'excellent',
-          explanation: "Develop the knight and attack d4.",
+          explanation: "Develop the kingside knight — Black will castle short and use the f6 knight actively.",
         },
         {
           san: 'g4',
