@@ -129,7 +129,7 @@ export function HandRangeMatrix({ selected, onChange, disabled = false, revealHa
     >
       {/* Rank labels row */}
       <div className="hrm-grid">
-        {RANKS.map((rowRank, row) =>
+        {RANKS.map((_rowRank, row) =>
           RANKS.map((_, col) => {
             const hand = cellHand(row, col);
             const tier = getTier(hand);

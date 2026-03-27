@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import type { RangeReadingScenario, Card, VillainHandCategory } from '../../types/poker';
+import type { Card, VillainHandCategory } from '../../types/poker';
 import { RANGE_READING_SCENARIOS } from '../../data/poker/rangeReadingScenarios';
 import { PlayingCard, BoardDisplay } from './HandDisplay';
 import { HandRangeMatrix, cardsToHandNotation, scoreRange, scoreLabel } from './HandRangeMatrix';
