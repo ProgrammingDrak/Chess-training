@@ -1,29 +1,32 @@
 import type { MoveStep, OpeningLine, PracticePhase } from '../types';
+import type { PlayedPair } from '../hooks/usePractice';
 import { QualityBadge } from './QualityBadge';
 
 interface Props {
   line: OpeningLine;
-  moveStep: MoveStep | null;
   phase: PracticePhase;
   wrongGuess: string | null;
-  moveIndex: number;
+  /** The target move when the player guessed wrong */
+  incorrectMoveStep: MoveStep | null;
+  /** The last learner move + opponent response, shown together above "your turn" */
+  lastPlayedPair: PlayedPair | null;
+  learnerMovesFound: number;
+  totalLearnerMoves: number;
   onAdvance: () => void;
 }
 
 export function MoveExplanation({
   line,
-  moveStep,
   phase,
   wrongGuess,
-  moveIndex,
+  incorrectMoveStep,
+  lastPlayedPair,
+  learnerMovesFound,
+  totalLearnerMoves,
   onAdvance,
 }: Props) {
-  const learnerMoves = line.moves.filter((m) => m.isLearnerMove);
-  const currentLearnerIdx = line.moves
-    .slice(0, moveIndex)
-    .filter((m) => m.isLearnerMove).length;
-
   if (phase === 'intro') {
+    const learnerMoves = line.moves.filter((m) => m.isLearnerMove);
     return (
       <div className="explanation-panel">
         <div className="panel-section">
@@ -56,37 +59,8 @@ export function MoveExplanation({
           <h3>Line Complete!</h3>
           <p>You've finished practicing <strong>{line.name}</strong>.</p>
           <p className="complete-note">
-            You found {learnerMoves.length} move{learnerMoves.length !== 1 ? 's' : ''} correctly.
+            You found {totalLearnerMoves} move{totalLearnerMoves !== 1 ? 's' : ''} correctly.
           </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!moveStep) return null;
-
-  if (phase === 'correct') {
-    return (
-      <div className="explanation-panel">
-        <div className="panel-section correct-section">
-          <div className="feedback-header correct">
-            <span className="feedback-icon">✓</span>
-            <span className="feedback-move">{moveStep.san}</span>
-            <QualityBadge quality={moveStep.quality} />
-          </div>
-          <p className="move-explanation">{moveStep.explanation}</p>
-          {moveStep.strategicNote && (
-            <div className="strategic-note">
-              <span className="note-label">💡 Strategic Idea</span>
-              <p>{moveStep.strategicNote}</p>
-            </div>
-          )}
-          <div className="progress-moves">
-            Move {currentLearnerIdx + 1} of {learnerMoves.length} found
-          </div>
-          <button className="btn-primary advance-btn" onClick={onAdvance}>
-            Continue →
-          </button>
         </div>
       </div>
     );
@@ -100,43 +74,66 @@ export function MoveExplanation({
             <span className="feedback-icon">✗</span>
             <span className="feedback-wrong">{wrongGuess}</span>
             <span className="feedback-arrow">→</span>
-            <span className="feedback-move">{moveStep.san}</span>
-            <QualityBadge quality={moveStep.quality} />
+            <span className="feedback-move">{incorrectMoveStep?.san}</span>
+            {incorrectMoveStep && <QualityBadge quality={incorrectMoveStep.quality} />}
           </div>
           <p className="incorrect-label">The correct move was:</p>
-          <p className="move-explanation">{moveStep.explanation}</p>
-          {moveStep.strategicNote && (
+          <p className="move-explanation">{incorrectMoveStep?.explanation}</p>
+          {incorrectMoveStep?.strategicNote && (
             <div className="strategic-note">
               <span className="note-label">💡 Strategic Idea</span>
-              <p>{moveStep.strategicNote}</p>
+              <p>{incorrectMoveStep.strategicNote}</p>
             </div>
           )}
           <button className="btn-secondary advance-btn" onClick={onAdvance}>
-            Got it — Continue →
+            Got it — Try Again →
           </button>
         </div>
       </div>
     );
   }
 
-  // playing phase — show what the opponent just played (last opponent move)
-  const lastOpponentMove = line.moves
-    .slice(0, moveIndex)
-    .reverse()
-    .find((m) => !m.isLearnerMove);
-
+  // playing phase
   return (
     <div className="explanation-panel">
-      {lastOpponentMove && (
-        <div className="panel-section opponent-section">
-          <div className="opponent-header">
-            <span className="opp-label">Opponent played:</span>
-            <span className="opp-move">{lastOpponentMove.san}</span>
-            <QualityBadge quality={lastOpponentMove.quality} size="sm" />
+      {lastPlayedPair && (
+        <>
+          {/* Learner's last move */}
+          <div className="panel-section correct-section">
+            <div className="feedback-header correct">
+              <span className="feedback-icon">✓</span>
+              <span className="feedback-move">{lastPlayedPair.learnerMove.san}</span>
+              <QualityBadge quality={lastPlayedPair.learnerMove.quality} />
+            </div>
+            <p className="move-explanation">{lastPlayedPair.learnerMove.explanation}</p>
+            {lastPlayedPair.learnerMove.strategicNote && (
+              <div className="strategic-note">
+                <span className="note-label">💡 Strategic Idea</span>
+                <p>{lastPlayedPair.learnerMove.strategicNote}</p>
+              </div>
+            )}
           </div>
-          <p className="move-explanation">{lastOpponentMove.explanation}</p>
-        </div>
+
+          {/* Opponent's response */}
+          {lastPlayedPair.opponentMove && (
+            <div className="panel-section opponent-section">
+              <div className="opponent-header">
+                <span className="opp-label">Opponent responds:</span>
+                <span className="opp-move">{lastPlayedPair.opponentMove.san}</span>
+                <QualityBadge quality={lastPlayedPair.opponentMove.quality} size="sm" />
+              </div>
+              <p className="move-explanation">{lastPlayedPair.opponentMove.explanation}</p>
+              {lastPlayedPair.opponentMove.strategicNote && (
+                <div className="strategic-note">
+                  <span className="note-label">💡 Strategic Idea</span>
+                  <p>{lastPlayedPair.opponentMove.strategicNote}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
+
       <div className="panel-section prompt-section">
         <div className="prompt-text">
           <span className="prompt-icon">🤔</span>
@@ -144,7 +141,7 @@ export function MoveExplanation({
         </div>
         <p className="prompt-hint">Drag a piece on the board to make your move.</p>
         <div className="progress-moves">
-          Move {currentLearnerIdx + 1} of {learnerMoves.length}
+          Move {learnerMovesFound + 1} of {totalLearnerMoves}
         </div>
       </div>
     </div>
