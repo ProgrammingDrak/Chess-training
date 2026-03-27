@@ -269,7 +269,7 @@ export const sicilianDefense: Opening = {
             "After g5, the Nf6 is displaced. Black might try …h6 or let the knight go to d7. Either way, White has space and attacking chances. Continue with Bg2, h4, and O-O-O.",
         },
         {
-          san: 'Nd7',
+          san: 'Nfd7',
           isLearnerMove: false,
           quality: 'best',
           explanation: "The knight retreats to d7 rather than being captured.",
