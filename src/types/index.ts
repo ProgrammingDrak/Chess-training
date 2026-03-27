@@ -73,8 +73,15 @@ export interface PracticeSession {
 
 // View state
 export type AppView =
-  | 'home'
+  | 'home'           // Game Selector (root)
+  | 'chess_home'     // Chess opening selector
   | 'opening_detail'
   | 'practice'
-  | 'review'
-  | 'dashboard';
+  | 'challenge'           // Challenge mode (5-streak)
+  | 'dashboard'
+  | 'poker_home'
+  | 'poker_drill'
+  | 'poker_dashboard'
+  | 'blackjack_home'
+  | 'blackjack_drill'
+  | 'blackjack_dashboard';
