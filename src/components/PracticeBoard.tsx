@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { Chessboard } from 'react-chessboard';
-import type { Opening, AppProgress } from '../types';
+import type { Opening, AppProgress, MoveStep } from '../types';
 import { usePractice } from '../hooks/usePractice';
 import { MoveExplanation } from './MoveExplanation';
 import { QualityBadge } from './QualityBadge';
@@ -24,9 +24,11 @@ export function PracticeBoard({
   const {
     session,
     currentLine,
+    effectiveMoves,
     currentMoveStep,
     currentFen,
     currentPhase,
+    lastPlayedPair,
     startLine,
     submitMove,
     advance,
@@ -67,13 +69,16 @@ export function PracticeBoard({
     ? progress.lines[currentLine.id]
     : null;
 
+  // Number of setup moves so we can convert between effectiveMoves index and line.moves index
+  const setupCount = opening.setupMoves.length;
+
+  // How many of the learner's moves in the current line have been completed
+  const lineRelativeIndex = Math.max(0, session.moveIndex - setupCount);
+  const learnerMovesFound = currentLine
+    ? currentLine.moves.slice(0, lineRelativeIndex).filter((m) => m.isLearnerMove).length
+    : 0;
   const totalLearnerMoves = currentLine
     ? currentLine.moves.filter((m) => m.isLearnerMove).length
-    : 0;
-  const foundSoFar = session
-    ? currentLine?.moves
-        .slice(0, session.moveIndex)
-        .filter((m) => m.isLearnerMove).length ?? 0
     : 0;
 
   return (
@@ -114,17 +119,22 @@ export function PracticeBoard({
       <div className="practice-content">
         {/* Board column */}
         <div className="board-column">
-          {/* Move progress indicator */}
+          {/* Move progress indicator — one pip per move in the line (not setup) */}
           <div className="move-progress">
-            {currentLine?.moves.map((move, i) => (
-              <div
-                key={i}
-                className={`move-pip ${
-                  i < (session.moveIndex) ? 'done' : i === session.moveIndex ? 'current' : 'pending'
-                } ${move.isLearnerMove ? 'learner' : 'opponent'}`}
-                title={`${move.isLearnerMove ? 'You' : 'Opponent'}: ${move.san}`}
-              />
-            ))}
+            {currentLine?.moves.map((move, i) => {
+              const effIdx = setupCount + i;
+              const state =
+                effIdx < session.moveIndex ? 'done'
+                : effIdx === session.moveIndex ? 'current'
+                : 'pending';
+              return (
+                <div
+                  key={i}
+                  className={`move-pip ${state} ${move.isLearnerMove ? 'learner' : 'opponent'}`}
+                  title={`${move.isLearnerMove ? 'You' : 'Opponent'}: ${move.san}`}
+                />
+              );
+            })}
           </div>
 
           <div className="board-wrapper">
@@ -154,21 +164,23 @@ export function PracticeBoard({
               ↺ Restart Line
             </button>
             <span className="move-counter">
-              {foundSoFar}/{totalLearnerMoves} moves found
+              {learnerMovesFound}/{totalLearnerMoves} moves found
             </span>
           </div>
         </div>
 
         {/* Explanation column */}
         <div className="explanation-column">
-          {(currentPhase === 'intro') && currentLine && (
+          {currentPhase === 'intro' && currentLine && (
             <div className="intro-wrapper">
               <MoveExplanation
                 line={currentLine}
-                moveStep={currentMoveStep}
                 phase={currentPhase}
-                wrongGuess={session.wrongGuess}
-                moveIndex={session.moveIndex}
+                wrongGuess={null}
+                incorrectMoveStep={null}
+                lastPlayedPair={null}
+                learnerMovesFound={0}
+                totalLearnerMoves={totalLearnerMoves}
                 onAdvance={advance}
               />
               <button className="btn-primary start-btn" onClick={startPlayingFromIntro}>
@@ -177,29 +189,30 @@ export function PracticeBoard({
             </div>
           )}
 
-          {(currentPhase === 'playing' ||
-            currentPhase === 'correct' ||
-            currentPhase === 'incorrect') &&
-            currentLine && (
-              <MoveExplanation
-                line={currentLine}
-                moveStep={currentMoveStep}
-                phase={currentPhase}
-                wrongGuess={session.wrongGuess}
-                moveIndex={session.moveIndex}
-                onAdvance={advance}
-              />
-            )}
+          {(currentPhase === 'playing' || currentPhase === 'incorrect') && currentLine && (
+            <MoveExplanation
+              line={currentLine}
+              phase={currentPhase}
+              wrongGuess={session.wrongGuess}
+              incorrectMoveStep={currentMoveStep}
+              lastPlayedPair={lastPlayedPair}
+              learnerMovesFound={learnerMovesFound}
+              totalLearnerMoves={totalLearnerMoves}
+              onAdvance={advance}
+            />
+          )}
 
           {(currentPhase === 'line_complete' || currentPhase === 'session_complete') &&
             currentLine && (
               <div className="complete-panel">
                 <MoveExplanation
                   line={currentLine}
-                  moveStep={currentMoveStep}
                   phase={currentPhase}
-                  wrongGuess={session.wrongGuess}
-                  moveIndex={session.moveIndex}
+                  wrongGuess={null}
+                  incorrectMoveStep={null}
+                  lastPlayedPair={null}
+                  learnerMovesFound={learnerMovesFound}
+                  totalLearnerMoves={totalLearnerMoves}
                   onAdvance={advance}
                 />
 
@@ -244,14 +257,12 @@ export function PracticeBoard({
 
           {/* All moves in the line — review panel */}
           {currentLine && (() => {
-            // Group moves into White/Black pairs
-            const setupCount = opening.setupMoves.length;
+            // Group moves into White/Black pairs (all moves from starting position)
             type PairCell = { move: MoveStep; idx: number };
             const pairs: { fullMove: number; white: PairCell | null; black: PairCell | null }[] = [];
-            currentLine.moves.forEach((move, i) => {
-              const totalIndex = setupCount + i;
-              const fullMoveNum = Math.floor(totalIndex / 2) + 1;
-              const isBlack = totalIndex % 2 === 1;
+            effectiveMoves.forEach((move, i) => {
+              const fullMoveNum = Math.floor(i / 2) + 1;
+              const isBlack = i % 2 === 1;
               if (!isBlack) {
                 pairs.push({ fullMove: fullMoveNum, white: { move, idx: i }, black: null });
               } else {

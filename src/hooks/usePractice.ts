@@ -1,10 +1,15 @@
 import { useState, useCallback, useMemo } from 'react';
 import { Chess } from 'chess.js';
-import type { Opening, OpeningLine, PracticeSession, PracticePhase } from '../types';
+import type { Opening, OpeningLine, PracticeSession, PracticePhase, MoveStep, MoveQuality } from '../types';
 
-function buildFenHistory(setupMoves: string[], lineMoves: string[]): string {
+export interface PlayedPair {
+  learnerMove: MoveStep;
+  opponentMove: MoveStep | null;
+}
+
+function buildFenHistory(moves: string[]): string {
   const chess = new Chess();
-  for (const move of [...setupMoves, ...lineMoves]) {
+  for (const move of moves) {
     try {
       chess.move(move);
     } catch {
@@ -14,30 +19,55 @@ function buildFenHistory(setupMoves: string[], lineMoves: string[]): string {
   return chess.fen();
 }
 
+// Prepend setupMoves as real MoveStep objects so practice starts from the initial position
+function buildEffectiveMoves(opening: Opening, line: OpeningLine): MoveStep[] {
+  const setupSteps: MoveStep[] = opening.setupMoves.map((san, i) => {
+    const isWhiteMove = i % 2 === 0;
+    const isLearnerMove = opening.learnerColor === 'white' ? isWhiteMove : !isWhiteMove;
+    return {
+      san,
+      isLearnerMove,
+      quality: 'best' as MoveQuality,
+      explanation: isLearnerMove
+        ? `Play ${san} to begin the opening.`
+        : `Opponent responds with ${san}.`,
+    };
+  });
+  return [...setupSteps, ...line.moves];
+}
+
 export function usePractice(opening: Opening | null) {
   const [session, setSession] = useState<PracticeSession | null>(null);
-  // Track whether the current learner-move was guessed correctly on first try
   const [firstTryCorrect, setFirstTryCorrect] = useState(true);
+  const [lastPlayedPair, setLastPlayedPair] = useState<PlayedPair | null>(null);
 
   const currentLine = useMemo((): OpeningLine | null => {
     if (!opening || session === null) return null;
     return opening.lines[session.lineIndex] ?? null;
   }, [opening, session]);
 
-  const currentMoveStep = useMemo(() => {
-    if (!currentLine || session === null) return null;
-    return currentLine.moves[session.moveIndex] ?? null;
-  }, [currentLine, session]);
+  // Full move sequence including setup moves prepended
+  const effectiveMoves = useMemo((): MoveStep[] => {
+    if (!opening || !currentLine) return [];
+    return buildEffectiveMoves(opening, currentLine);
+  }, [opening, currentLine]);
 
+  const currentMoveStep = useMemo(() => {
+    if (session === null) return null;
+    return effectiveMoves[session.moveIndex] ?? null;
+  }, [effectiveMoves, session]);
+
+  // FEN built from the starting position using the full move history
   const currentFen = useMemo(() => {
     if (!session) return 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-    return buildFenHistory(opening?.setupMoves ?? [], session.moveHistory);
-  }, [session, opening]);
+    return buildFenHistory(session.moveHistory);
+  }, [session]);
 
   const startLine = useCallback(
     (lineIndex: number) => {
       if (!opening) return;
       setFirstTryCorrect(true);
+      setLastPlayedPair(null);
       setSession({
         openingId: opening.id,
         lineIndex,
@@ -58,13 +88,13 @@ export function usePractice(opening: Opening | null) {
 
   // Advance through opponent (non-learner) moves automatically
   const advanceOpponentMoves = useCallback(
-    (sess: PracticeSession, line: OpeningLine): PracticeSession => {
+    (sess: PracticeSession, moves: MoveStep[]): PracticeSession => {
       let s = { ...sess };
       while (
-        s.moveIndex < line.moves.length &&
-        !line.moves[s.moveIndex].isLearnerMove
+        s.moveIndex < moves.length &&
+        !moves[s.moveIndex].isLearnerMove
       ) {
-        const move = line.moves[s.moveIndex];
+        const move = moves[s.moveIndex];
         s = {
           ...s,
           moveHistory: [...s.moveHistory, move.san],
@@ -72,7 +102,7 @@ export function usePractice(opening: Opening | null) {
           wrongGuess: null,
         };
       }
-      if (s.moveIndex >= line.moves.length) {
+      if (s.moveIndex >= moves.length) {
         s.phase = 'line_complete';
       }
       return s;
@@ -82,12 +112,12 @@ export function usePractice(opening: Opening | null) {
 
   const submitMove = useCallback(
     (from: string, to: string): boolean => {
-      if (!session || !currentLine || !currentMoveStep) return false;
+      if (!session || !currentMoveStep) return false;
       if (!currentMoveStep.isLearnerMove) return false;
 
-      // Rebuild the position and convert coordinate move to SAN
+      // Rebuild the position from scratch using the full move history
       const chess = new Chess();
-      for (const moveSan of [...(opening?.setupMoves ?? []), ...session.moveHistory]) {
+      for (const moveSan of session.moveHistory) {
         chess.move(moveSan);
       }
 
@@ -96,7 +126,6 @@ export function usePractice(opening: Opening | null) {
         const result = chess.move({ from, to, promotion: 'q' });
         actualSan = result.san;
       } catch {
-        // Illegal move
         setSession((prev) =>
           prev ? { ...prev, phase: 'incorrect', wrongGuess: `${from}-${to}` } : null,
         );
@@ -107,16 +136,26 @@ export function usePractice(opening: Opening | null) {
       const isCorrect = actualSan === currentMoveStep.san;
 
       if (isCorrect) {
+        const learnerMove = currentMoveStep;
         const nextMoveIndex = session.moveIndex + 1;
-        const next: PracticeSession = {
+
+        // Peek at the opponent's immediate response (if it exists and is not a learner move)
+        const opponentMoveStep = effectiveMoves[nextMoveIndex];
+        const opponentMove =
+          opponentMoveStep && !opponentMoveStep.isLearnerMove ? opponentMoveStep : null;
+
+        // Build next session: apply learner move then auto-advance all opponent moves
+        let next: PracticeSession = {
           ...session,
           moveHistory: [...session.moveHistory, currentMoveStep.san],
           moveIndex: nextMoveIndex,
-          phase: 'correct',
+          phase: 'playing',
           wrongGuess: null,
         };
+        next = advanceOpponentMoves(next, effectiveMoves);
+
+        setLastPlayedPair({ learnerMove, opponentMove });
         setSession(next);
-        setFirstTryCorrect((prev) => prev && true);
         return true;
       } else {
         setSession((prev) =>
@@ -126,21 +165,16 @@ export function usePractice(opening: Opening | null) {
         return false;
       }
     },
-    [session, currentLine, currentMoveStep],
+    [session, currentMoveStep, effectiveMoves, advanceOpponentMoves],
   );
 
-  // Called after showing correct/incorrect feedback — advance to next step
+  // Used only after an incorrect guess — returns to 'playing' at the same moveIndex
   const advance = useCallback(() => {
-    if (!session || !currentLine) return;
-
-    // If we're in 'correct' state, moveIndex was already incremented — advance opponent moves
-    let next: PracticeSession = {
-      ...session,
-      phase: 'playing',
-    };
-    next = advanceOpponentMoves(next, currentLine);
+    if (!session) return;
+    let next: PracticeSession = { ...session, phase: 'playing' };
+    next = advanceOpponentMoves(next, effectiveMoves);
     setSession(next);
-  }, [session, currentLine, advanceOpponentMoves]);
+  }, [session, effectiveMoves, advanceOpponentMoves]);
 
   const nextLine = useCallback(
     (onRecordAttempt?: (lineId: string, firstTry: boolean) => void) => {
@@ -157,6 +191,7 @@ export function usePractice(opening: Opening | null) {
       }
 
       setFirstTryCorrect(true);
+      setLastPlayedPair(null);
       setSession({
         openingId: opening.id,
         lineIndex: nextLineIndex,
@@ -172,6 +207,7 @@ export function usePractice(opening: Opening | null) {
   const restartLine = useCallback(() => {
     if (!session) return;
     setFirstTryCorrect(true);
+    setLastPlayedPair(null);
     setSession({
       ...session,
       moveIndex: 0,
@@ -184,25 +220,28 @@ export function usePractice(opening: Opening | null) {
   const resetSession = useCallback(() => {
     setSession(null);
     setFirstTryCorrect(true);
+    setLastPlayedPair(null);
   }, []);
 
-  // After 'intro' phase, auto-advance opponent opening moves
   const startPlayingFromIntro = useCallback(() => {
-    if (!session || !currentLine) return;
+    if (!session) return;
+    setLastPlayedPair(null);
     let next: PracticeSession = { ...session, phase: 'playing' };
-    next = advanceOpponentMoves(next, currentLine);
+    next = advanceOpponentMoves(next, effectiveMoves);
     setSession(next);
-  }, [session, currentLine, advanceOpponentMoves]);
+  }, [session, effectiveMoves, advanceOpponentMoves]);
 
   const currentPhase: PracticePhase = session?.phase ?? 'idle';
 
   return {
     session,
     currentLine,
+    effectiveMoves,
     currentMoveStep,
     currentFen,
     currentPhase,
     firstTryCorrect,
+    lastPlayedPair,
     startLine,
     beginPractice,
     submitMove,
