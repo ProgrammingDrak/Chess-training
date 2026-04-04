@@ -5,7 +5,7 @@
     "buildCommand": "npm run build"
   },
   "deploy": {
-    "startCommand": "sh -c 'export PATH=/app/node_modules/.bin:$PATH; vite preview --host 0.0.0.0 --port $PORT'",
+    "startCommand": "caddy file-server --root /app/dist --listen :$PORT",
     "healthcheckPath": "/",
     "healthcheckTimeout": 100,
     "restartPolicyType": "ON_FAILURE",

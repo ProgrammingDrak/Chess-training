@@ -8,4 +8,4 @@ cmds = ["npm install --ignore-engines"]
 cmds = ["npm run build"]
 
 [start]
-cmd = "npx --yes serve -s dist -l $PORT"
+cmd = "caddy file-server --root /app/dist --listen :$PORT"
