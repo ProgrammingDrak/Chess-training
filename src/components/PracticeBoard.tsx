@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Chessboard } from 'react-chessboard';
 import type { Opening, AppProgress, MoveStep } from '../types';
 import { usePractice } from '../hooks/usePractice';
@@ -47,13 +47,54 @@ export function PracticeBoard({
   const isPlayerTurn =
     currentPhase === 'playing' && currentMoveStep?.isLearnerMove === true;
 
+  // Click-to-move state
+  const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
+  const playerPrefix = opening.learnerColor === 'white' ? 'w' : 'b';
+
+  // Clear selection when it's no longer the player's turn
+  useEffect(() => {
+    if (!isPlayerTurn) setSelectedSquare(null);
+  }, [isPlayerTurn]);
+
   const handlePieceDrop = useCallback(
     (sourceSquare: Square, targetSquare: Square): boolean => {
       if (!isPlayerTurn) return false;
+      setSelectedSquare(null);
       return submitMove(sourceSquare, targetSquare);
     },
     [isPlayerTurn, submitMove],
   );
+
+  const handleSquareClick = useCallback(
+    (square: Square, piece: string | undefined) => {
+      if (!isPlayerTurn) {
+        setSelectedSquare(null);
+        return;
+      }
+
+      if (selectedSquare === null) {
+        // No piece selected — select if it's the player's piece
+        if (piece && piece[0] === playerPrefix) {
+          setSelectedSquare(square);
+        }
+      } else if (square === selectedSquare) {
+        // Clicking the same square — deselect
+        setSelectedSquare(null);
+      } else if (piece && piece[0] === playerPrefix) {
+        // Clicking another of player's pieces — change selection
+        setSelectedSquare(square);
+      } else {
+        // Clicking empty square or opponent piece — attempt move
+        submitMove(selectedSquare, square);
+        setSelectedSquare(null);
+      }
+    },
+    [isPlayerTurn, selectedSquare, playerPrefix, submitMove],
+  );
+
+  const selectedSquareStyles = selectedSquare
+    ? { [selectedSquare]: { backgroundColor: 'rgba(255, 255, 0, 0.4)' } }
+    : {};
 
   const handleRecordAndNext = useCallback(() => {
     nextLine((lineId, firstTry) => {
@@ -142,7 +183,9 @@ export function PracticeBoard({
               position={currentFen}
               boardOrientation={boardOrientation}
               onPieceDrop={handlePieceDrop}
+              onSquareClick={handleSquareClick}
               arePiecesDraggable={isPlayerTurn}
+              customSquareStyles={selectedSquareStyles}
               customBoardStyle={{
                 borderRadius: '8px',
                 boxShadow: '0 8px 32px rgba(0,0,0,0.5)',

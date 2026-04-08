@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Chessboard } from 'react-chessboard';
 import type { Opening, AppProgress } from '../types';
 import type { Square } from 'chess.js';
@@ -25,19 +25,56 @@ export function ChallengeBoard({ progress, onBack }: Props) {
     resetChallenge,
   } = useChallengeMode(ALL_OPENINGS, progress);
 
+  const currentOpening: Opening | null = currentItem?.opening ?? null;
+  const currentLine = currentOpening?.lines[currentItem?.lineIndex ?? 0] ?? null;
+  const boardOrientation = currentOpening?.learnerColor === 'black' ? 'black' : 'white';
+  const isPlayerTurn = state?.phase === 'playing' && currentMoveStep?.isLearnerMove === true;
+
+  // Click-to-move state
+  const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
+  const playerPrefix = currentOpening?.learnerColor === 'white' ? 'w' : 'b';
+
+  // Clear selection when it's no longer the player's turn
+  useEffect(() => {
+    if (!isPlayerTurn) setSelectedSquare(null);
+  }, [isPlayerTurn]);
+
   const handlePieceDrop = useCallback(
     (sourceSquare: Square, targetSquare: Square): boolean => {
       if (state?.phase !== 'playing') return false;
       if (!currentMoveStep?.isLearnerMove) return false;
+      setSelectedSquare(null);
       return submitMove(sourceSquare, targetSquare);
     },
     [state, currentMoveStep, submitMove],
   );
 
-  const currentOpening: Opening | null = currentItem?.opening ?? null;
-  const currentLine = currentOpening?.lines[currentItem?.lineIndex ?? 0] ?? null;
-  const boardOrientation = currentOpening?.learnerColor === 'black' ? 'black' : 'white';
-  const isPlayerTurn = state?.phase === 'playing' && currentMoveStep?.isLearnerMove === true;
+  const handleSquareClick = useCallback(
+    (square: Square, piece: string | undefined) => {
+      if (!isPlayerTurn) {
+        setSelectedSquare(null);
+        return;
+      }
+
+      if (selectedSquare === null) {
+        if (piece && piece[0] === playerPrefix) {
+          setSelectedSquare(square);
+        }
+      } else if (square === selectedSquare) {
+        setSelectedSquare(null);
+      } else if (piece && piece[0] === playerPrefix) {
+        setSelectedSquare(square);
+      } else {
+        submitMove(selectedSquare, square);
+        setSelectedSquare(null);
+      }
+    },
+    [isPlayerTurn, selectedSquare, playerPrefix, submitMove],
+  );
+
+  const selectedSquareStyles = selectedSquare
+    ? { [selectedSquare]: { backgroundColor: 'rgba(255, 255, 0, 0.4)' } }
+    : {};
 
   // Count learner moves in the current line for progress display
   const setupCount = currentOpening?.setupMoves.length ?? 0;
@@ -198,7 +235,9 @@ export function ChallengeBoard({ progress, onBack }: Props) {
               position={currentFen}
               boardOrientation={boardOrientation}
               onPieceDrop={handlePieceDrop}
+              onSquareClick={handleSquareClick}
               arePiecesDraggable={isPlayerTurn}
+              customSquareStyles={selectedSquareStyles}
               customBoardStyle={{
                 borderRadius: '8px',
                 boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
@@ -312,7 +351,7 @@ export function ChallengeBoard({ progress, onBack }: Props) {
                   <span className="prompt-icon">🤔</span>
                   <strong>What's the best move?</strong>
                 </div>
-                <p className="prompt-hint">Drag a piece on the board — no mistakes allowed!</p>
+                <p className="prompt-hint">Drag or tap a piece to move it — no mistakes allowed!</p>
               </div>
 
               {/* Move list */}

@@ -139,7 +139,7 @@ export function MoveExplanation({
           <span className="prompt-icon">🤔</span>
           <strong>Your turn — what's the best move?</strong>
         </div>
-        <p className="prompt-hint">Drag a piece on the board to make your move.</p>
+        <p className="prompt-hint">Drag or tap a piece to make your move.</p>
         <div className="progress-moves">
           Move {learnerMovesFound + 1} of {totalLearnerMoves}
         </div>
