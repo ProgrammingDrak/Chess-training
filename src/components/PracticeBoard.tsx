@@ -4,6 +4,7 @@ import type { Opening, AppProgress, MoveStep } from '../types';
 import { usePractice } from '../hooks/usePractice';
 import { MoveExplanation } from './MoveExplanation';
 import { QualityBadge } from './QualityBadge';
+import { isTouchDevice } from '../utils/isTouchDevice';
 import type { Square } from 'chess.js';
 
 interface Props {
@@ -184,7 +185,7 @@ export function PracticeBoard({
               boardOrientation={boardOrientation}
               onPieceDrop={handlePieceDrop}
               onSquareClick={handleSquareClick}
-              arePiecesDraggable={isPlayerTurn}
+              arePiecesDraggable={isPlayerTurn && !isTouchDevice}
               customSquareStyles={selectedSquareStyles}
               customBoardStyle={{
                 borderRadius: '8px',

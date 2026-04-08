@@ -4,6 +4,7 @@ import type { Opening, AppProgress } from '../types';
 import type { Square } from 'chess.js';
 import { useChallengeMode, STREAK_TARGET } from '../hooks/useChallengeMode';
 import { ALL_OPENINGS } from '../data/openings';
+import { isTouchDevice } from '../utils/isTouchDevice';
 
 interface Props {
   progress: AppProgress;
@@ -236,7 +237,7 @@ export function ChallengeBoard({ progress, onBack }: Props) {
               boardOrientation={boardOrientation}
               onPieceDrop={handlePieceDrop}
               onSquareClick={handleSquareClick}
-              arePiecesDraggable={isPlayerTurn}
+              arePiecesDraggable={isPlayerTurn && !isTouchDevice}
               customSquareStyles={selectedSquareStyles}
               customBoardStyle={{
                 borderRadius: '8px',
