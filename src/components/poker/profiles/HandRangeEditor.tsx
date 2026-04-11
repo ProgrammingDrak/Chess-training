@@ -21,6 +21,8 @@ interface HandRangeEditorProps {
   onChange: (next: Record<string, RangeAction>) => void;
   callThresholdBB: number;
   onChangeCallThreshold: (bb: number) => void;
+  /** Position-aware VPIP suggestion — pre-seeds the quick-start slider. */
+  suggestedPct?: number;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -30,9 +32,10 @@ export function HandRangeEditor({
   onChange,
   callThresholdBB,
   onChangeCallThreshold,
+  suggestedPct,
 }: HandRangeEditorProps) {
   const [activeBrush, setActiveBrush] = useState<RangeAction>('raise');
-  const [playPct, setPlayPct] = useState(20);
+  const [playPct, setPlayPct] = useState(suggestedPct ?? 20);
   const isDragging = useRef(false);
 
   const getAction = (hand: string): RangeAction => range[hand] ?? 'fold';
@@ -109,6 +112,9 @@ export function HandRangeEditor({
         </button>
         <span className="hre-qs-hint">
           ≈ {Math.round((playPct / 100) * 1326)} combos of 1326
+          {suggestedPct !== undefined && (
+            <> · <span title="GTO-ish open range for this position">suggested {suggestedPct}%</span></>
+          )}
         </span>
       </div>
 

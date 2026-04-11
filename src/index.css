@@ -4223,6 +4223,13 @@ button {
   color: var(--text-primary);
 }
 
+.pe-section-ctx {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+
 .pe-section-desc {
   font-size: 0.83rem;
   color: var(--text-muted);

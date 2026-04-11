@@ -1,17 +1,66 @@
 import { cellHand, handCombos } from '../../utils/handMatrix';
-import type { RangeAction, PositionRangeConfig, ProfileTemplate } from '../../types/profiles';
+import type {
+  RangeAction,
+  SituationRange,
+  PositionRangeConfig,
+  ProfileTemplate,
+  ActionContext,
+} from '../../types/profiles';
+import { DEFAULT_ACTION_CONTEXT } from '../../types/profiles';
 
-// ─── Position helpers ────────────────────────────────────────────────────────
+// ─── Position labels by table size ───────────────────────────────────────────
+//
+// Labels follow standard modern poker nomenclature:
+//   9-max: UTG  UTG+1  UTG+2  LJ   HJ   CO   BTN  SB  BB
+//   8-max: UTG  UTG+1  LJ     HJ   CO   BTN  SB   BB
+//   7-max: UTG  LJ     HJ     CO   BTN  SB   BB
+//   6-max: UTG  HJ     CO     BTN  SB   BB
+//   5-max: HJ   CO     BTN    SB   BB
+//   4-max: CO   BTN    SB     BB
+//   3-max: BTN  SB     BB
+//   2-max: BTN  BB   (heads-up: BTN = dealer/SB)
 
-/** Returns ordered positions for a given table size (EP→BB). */
+const POSITIONS_BY_TABLE_SIZE: Record<number, string[]> = {
+  2: ['BTN', 'BB'],
+  3: ['BTN', 'SB', 'BB'],
+  4: ['CO', 'BTN', 'SB', 'BB'],
+  5: ['HJ', 'CO', 'BTN', 'SB', 'BB'],
+  6: ['UTG', 'HJ', 'CO', 'BTN', 'SB', 'BB'],
+  7: ['UTG', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB'],
+  8: ['UTG', 'UTG+1', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB'],
+  9: ['UTG', 'UTG+1', 'UTG+2', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB'],
+};
+
 export function getPositionsForTableSize(tableSize: number): string[] {
-  if (tableSize <= 2) return ['SB', 'BB'];
-  if (tableSize <= 3) return ['BTN', 'SB', 'BB'];
-  if (tableSize <= 4) return ['CO', 'BTN', 'SB', 'BB'];
-  if (tableSize <= 5) return ['HJ', 'CO', 'BTN', 'SB', 'BB'];
-  if (tableSize <= 6) return ['MP', 'HJ', 'CO', 'BTN', 'SB', 'BB'];
-  if (tableSize <= 7) return ['UTG+1', 'MP', 'HJ', 'CO', 'BTN', 'SB', 'BB'];
-  return ['UTG', 'UTG+1', 'MP', 'HJ', 'CO', 'BTN', 'SB', 'BB'];
+  return POSITIONS_BY_TABLE_SIZE[tableSize] ?? POSITIONS_BY_TABLE_SIZE[6];
+}
+
+// ─── Position-aware VPIP suggestions ────────────────────────────────────────
+//
+// Suggested "play top X%" default for the quick-start slider, based on
+// table size × position.  Ranges open wider short-handed and from late position.
+// These are approximate GTO-ish open-raise frequencies; callers can use them
+// as starting points for the percentile slider.
+
+type PosKey = string; // e.g. "UTG", "BTN", "BB"
+
+const VPIP_SUGGESTIONS: Record<number, Record<PosKey, number>> = {
+  2: { BTN: 70, BB: 85 },
+  3: { BTN: 58, SB: 42, BB: 75 },
+  4: { CO: 32, BTN: 50, SB: 36, BB: 72 },
+  5: { HJ: 22, CO: 30, BTN: 46, SB: 32, BB: 70 },
+  6: { UTG: 16, HJ: 22, CO: 28, BTN: 42, SB: 30, BB: 68 },
+  7: { UTG: 14, LJ: 18, HJ: 22, CO: 28, BTN: 42, SB: 30, BB: 68 },
+  8: { UTG: 12, 'UTG+1': 14, LJ: 18, HJ: 22, CO: 28, BTN: 42, SB: 30, BB: 68 },
+  9: { UTG: 11, 'UTG+1': 13, 'UTG+2': 15, LJ: 17, HJ: 21, CO: 27, BTN: 42, SB: 30, BB: 68 },
+};
+
+/**
+ * Suggested open-raise VPIP % for a given position at a given table size.
+ * Returns a sensible fallback (20%) if the combination isn't in the table.
+ */
+export function suggestedVpip(tableSize: number, position: string): number {
+  return VPIP_SUGGESTIONS[tableSize]?.[position] ?? 20;
 }
 
 // ─── Hand strength (Chen formula) ────────────────────────────────────────────
@@ -37,18 +86,14 @@ function chenScore(hand: string): number {
   let score = Math.max(v1, v2);
   if (suited) score += 2;
 
-  // Gap penalty (gap = number of ranks between the two cards, 0 = connected)
   const rankOrder = 'AKQJT98765432';
-  const i1 = rankOrder.indexOf(r1);
-  const i2 = rankOrder.indexOf(r2);
-  const gap = Math.abs(i1 - i2) - 1;
+  const gap = Math.abs(rankOrder.indexOf(r1) - rankOrder.indexOf(r2)) - 1;
 
   if (gap === 1) score -= 1;
   else if (gap === 2) score -= 2;
   else if (gap === 3) score -= 4;
   else if (gap >= 4) score -= 5;
 
-  // Low connector bonus (both cards below a jack and gap ≤ 1)
   if (gap <= 1 && Math.max(v1, v2) < 6) score += 1;
 
   return score;
@@ -87,12 +132,7 @@ export const HAND_RANKINGS: HandRankEntry[] = (() => {
   let cumulative = 0;
   return hands.map((h, idx) => {
     cumulative += h.combos;
-    return {
-      ...h,
-      cumulativeCombos: cumulative,
-      percentile: (cumulative / 1326) * 100,
-      rank: idx + 1,
-    };
+    return { ...h, cumulativeCombos: cumulative, percentile: (cumulative / 1326) * 100, rank: idx + 1 };
   });
 })();
 
@@ -106,12 +146,11 @@ export const HAND_PCT_MAP: Record<string, number> = Object.fromEntries(
   HAND_RANKINGS.map(e => [e.hand, e.percentile])
 );
 
-// ─── Range builder ───────────────────────────────────────────────────────────
+// ─── Range builders ──────────────────────────────────────────────────────────
 
 /**
- * Build a full 169-hand range that assigns `playAction` to all hands
- * whose cumulative combo count falls within the top `playPct` percent,
- * and 'fold' to the rest.
+ * Build a full 169-hand range: top `playPct`% of combos → `playAction`,
+ * everything else → 'fold'.
  */
 export function buildRangeFromPercentile(
   playPct: number,
@@ -122,40 +161,13 @@ export function buildRangeFromPercentile(
   let cumulative = 0;
 
   for (const entry of HAND_RANKINGS) {
-    // Include the hand if adding it keeps us at or under the target
-    // (use midpoint: include if we were already under target before this hand)
-    if (cumulative < targetCombos) {
-      range[entry.hand] = playAction;
-    } else {
-      range[entry.hand] = 'fold';
-    }
+    range[entry.hand] = cumulative < targetCombos ? playAction : 'fold';
     cumulative += entry.combos;
   }
   return range;
 }
 
-/** Build the positions array for a new profile with the same range on every position. */
-export function buildDefaultPositions(
-  tableSize: number,
-  defaultRange: Record<string, RangeAction>,
-  callThresholdBB: number,
-): PositionRangeConfig[] {
-  return getPositionsForTableSize(tableSize).map(position => ({
-    position,
-    range: { ...defaultRange },
-    callThresholdBB,
-  }));
-}
-
-// ─── Built-in templates ──────────────────────────────────────────────────────
-
-const GTO_POST_FLOP = {
-  flop:  { minPotOddsPct: 25, minEquityPct: 30 },
-  turn:  { minPotOddsPct: 28, minEquityPct: 33 },
-  river: { minPotOddsPct: 30, minEquityPct: 35 },
-};
-
-/** Build a range where top X% = raiseAction and next Y% = callAction, rest = fold. */
+/** Build a range: top `raisePct`% → raise, next `callPct`% → call, rest → fold. */
 function buildTwoActionRange(
   raisePct: number,
   callPct: number,
@@ -166,17 +178,60 @@ function buildTwoActionRange(
   let cumulative = 0;
 
   for (const entry of HAND_RANKINGS) {
-    if (cumulative < raiseThreshold) {
-      range[entry.hand] = 'raise';
-    } else if (cumulative < callThreshold) {
-      range[entry.hand] = 'call';
-    } else {
-      range[entry.hand] = 'fold';
-    }
+    if (cumulative < raiseThreshold)      range[entry.hand] = 'raise';
+    else if (cumulative < callThreshold)  range[entry.hand] = 'call';
+    else                                  range[entry.hand] = 'fold';
     cumulative += entry.combos;
   }
   return range;
 }
+
+// ─── Position config builders ─────────────────────────────────────────────────
+
+/** Wrap a flat range + threshold into the `situations` structure. */
+export function makeSituationRange(
+  range: Record<string, RangeAction>,
+  callThresholdBB: number,
+): SituationRange {
+  return { range, callThresholdBB };
+}
+
+/**
+ * Build a `PositionRangeConfig` array for the given table size, seeding every
+ * position with the provided `SituationRange` under `DEFAULT_ACTION_CONTEXT` ('RFI').
+ *
+ * The `situations` map is intentionally sparse (only 'RFI' populated today)
+ * so that future action-context keys can be added without a schema migration.
+ */
+export function buildDefaultPositions(
+  tableSize: number,
+  baseSitRange: SituationRange,
+): PositionRangeConfig[] {
+  return getPositionsForTableSize(tableSize).map(position => ({
+    position,
+    situations: {
+      [DEFAULT_ACTION_CONTEXT]: {
+        range: { ...baseSitRange.range },
+        callThresholdBB: baseSitRange.callThresholdBB,
+      },
+    } as Partial<Record<ActionContext, SituationRange>>,
+  }));
+}
+
+// ─── Built-in templates ──────────────────────────────────────────────────────
+
+const GTO_POST_FLOP: PlayerProfile_postFlop = {
+  flop:  { minPotOddsPct: 25, minEquityPct: 30 },
+  turn:  { minPotOddsPct: 28, minEquityPct: 33 },
+  river: { minPotOddsPct: 30, minEquityPct: 35 },
+};
+
+// Local alias so we don't import the whole type just for this
+type PlayerProfile_postFlop = {
+  flop:  { minPotOddsPct: number; minEquityPct: number };
+  turn:  { minPotOddsPct: number; minEquityPct: number };
+  river: { minPotOddsPct: number; minEquityPct: number };
+};
 
 export const PROFILE_TEMPLATES: ProfileTemplate[] = [
   {
@@ -186,7 +241,7 @@ export const PROFILE_TEMPLATES: ProfileTemplate[] = [
     icon: '🦔',
     type: 'villain',
     defaultCallThresholdBB: 10,
-    range: buildRangeFromPercentile(12, 'raise'),
+    baseRange: makeSituationRange(buildRangeFromPercentile(12, 'raise'), 10),
     postFlop: {
       flop:  { minPotOddsPct: 40, minEquityPct: 45 },
       turn:  { minPotOddsPct: 45, minEquityPct: 50 },
@@ -200,7 +255,7 @@ export const PROFILE_TEMPLATES: ProfileTemplate[] = [
     icon: '🎯',
     type: 'self',
     defaultCallThresholdBB: 20,
-    range: buildTwoActionRange(16, 8), // top 16% raise, next 8% call
+    baseRange: makeSituationRange(buildTwoActionRange(16, 8), 20),
     postFlop: GTO_POST_FLOP,
   },
   {
@@ -210,7 +265,7 @@ export const PROFILE_TEMPLATES: ProfileTemplate[] = [
     icon: '🔥',
     type: 'self',
     defaultCallThresholdBB: 30,
-    range: buildRangeFromPercentile(38, 'raise'),
+    baseRange: makeSituationRange(buildRangeFromPercentile(38, 'raise'), 30),
     postFlop: {
       flop:  { minPotOddsPct: 20, minEquityPct: 22 },
       turn:  { minPotOddsPct: 22, minEquityPct: 25 },
@@ -224,7 +279,7 @@ export const PROFILE_TEMPLATES: ProfileTemplate[] = [
     icon: '🐟',
     type: 'villain',
     defaultCallThresholdBB: 999,
-    range: buildTwoActionRange(12, 36), // top 12% raise, next 36% call/limp
+    baseRange: makeSituationRange(buildTwoActionRange(12, 36), 999),
     postFlop: {
       flop:  { minPotOddsPct: 15, minEquityPct: 18 },
       turn:  { minPotOddsPct: 15, minEquityPct: 20 },
@@ -238,7 +293,7 @@ export const PROFILE_TEMPLATES: ProfileTemplate[] = [
     icon: '💥',
     type: 'villain',
     defaultCallThresholdBB: 999,
-    range: buildRangeFromPercentile(62, 'raise'),
+    baseRange: makeSituationRange(buildRangeFromPercentile(62, 'raise'), 999),
     postFlop: {
       flop:  { minPotOddsPct: 10, minEquityPct: 12 },
       turn:  { minPotOddsPct: 12, minEquityPct: 15 },

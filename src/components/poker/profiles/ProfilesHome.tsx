@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { PlayerProfile } from '../../../types/profiles';
+import { DEFAULT_ACTION_CONTEXT } from '../../../types/profiles';
 import { PROFILE_TEMPLATES } from '../../../data/poker/profileTemplates';
 import { handCombos } from '../../../utils/handMatrix';
 import { ProfileEditor } from './ProfileEditor';
@@ -166,12 +167,14 @@ function ProfileCard({
   onConfirmDelete,
   onCancelDelete,
 }: ProfileCardProps) {
-  // Compute VPIP from first position's range
+  // Compute VPIP from the first position's RFI range
   const firstPos = profile.positions[0];
   const vpipPct = firstPos
     ? (() => {
+        const rfi = firstPos.situations[DEFAULT_ACTION_CONTEXT];
+        if (!rfi) return '—';
         let played = 0;
-        for (const [hand, action] of Object.entries(firstPos.range)) {
+        for (const [hand, action] of Object.entries(rfi.range)) {
           if (action !== 'fold') played += handCombos(hand);
         }
         return ((played / 1326) * 100).toFixed(0);

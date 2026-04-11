@@ -12,13 +12,62 @@ export type ProfileType = 'self' | 'villain';
  */
 export type RangeAction = 'fold' | 'limp' | 'call' | 'raise';
 
-/** Per-position range configuration. */
+/**
+ * What happened before it is your turn to act.
+ *
+ * Today the UI only populates 'RFI' (all folded to you — raise first in).
+ * The other variants are reserved for future drill dimensions and are stored
+ * here so adding them later requires no schema rewrite.
+ *
+ * Examples of future values:
+ *   'vs_open'      — facing one open raise, no callers
+ *   'vs_open_call' — facing one raise + one cold-caller (squeeze / flat spot)
+ *   'vs_3bet'      — facing a 3-bet
+ *   'vs_4bet'      — facing a 4-bet
+ *
+ * The type is a union of known literals + `string` so callers can store
+ * arbitrary future contexts without a code change.
+ */
+export type ActionContext =
+  | 'RFI'            // All folded to you — Raise First In
+  | 'vs_open'        // Facing one open raise, no callers
+  | 'vs_open_call'   // Facing one raise + one caller
+  | 'vs_3bet'        // Facing a 3-bet
+  | 'vs_4bet'        // Facing a 4-bet
+  | (string & {});   // Extensible — open-ended for future contexts
+
+/** The context that the current UI creates/edits. */
+export const DEFAULT_ACTION_CONTEXT: ActionContext = 'RFI';
+
+/**
+ * Hand range + threshold for a single (position, action-context) pair.
+ * Kept as a flat leaf so it can be shared across positions/contexts via spread.
+ */
+export interface SituationRange {
+  /** Maps every hand notation (e.g. "AKs", "72o", "JJ") to an action. */
+  range: Record<string, RangeAction>;
+  /** BB ceiling for the 🔵 'call' action — raise/call up to this many BBs only. */
+  callThresholdBB: number;
+}
+
+/**
+ * All range data for a single position.
+ *
+ * `situations` is keyed by ActionContext.  Today only 'RFI' is written by the
+ * UI; the other keys are empty but the structure already supports them so a
+ * future "facing a 3-bet" editor can be dropped in without a schema migration.
+ */
 export interface PositionRangeConfig {
   position: string;
-  /** Maps each of the 169 hand notations (e.g. "AKs", "72o", "JJ") to an action. */
-  range: Record<string, RangeAction>;
-  /** BB threshold for the 'call' (blue) action — raise/call up to this many BBs. */
-  callThresholdBB: number;
+  /**
+   * 3-D key: table_size (carried by the parent PlayerProfile) ×
+   *           position (this object's .position field) ×
+   *           action_before_you (this Record's key).
+   *
+   * Access pattern today:  positionConfig.situations['RFI']
+   * Access pattern later:  positionConfig.situations['vs_3bet']
+   */
+  situations: Partial<Record<ActionContext, SituationRange>>;
 }
 
 export interface PostFlopStreet {
@@ -31,10 +80,11 @@ export interface PlayerProfile {
   id: string;
   name: string;
   type: ProfileType;
-  tableSize: number; // 2–9 players
-  /** Global default BB threshold for the 'call' action. */
+  /** Number of players at the table (2–9). Determines which positions exist. */
+  tableSize: number;
+  /** Global default BB threshold for the 🔵 'call' action. */
   defaultCallThresholdBB: number;
-  /** One entry per position in this table size. */
+  /** One entry per position for this table size, in EP→BTN→blinds order. */
   positions: PositionRangeConfig[];
   postFlop: {
     flop:  PostFlopStreet;
@@ -47,7 +97,7 @@ export interface PlayerProfile {
   templateName?: string;
 }
 
-/** Shape of a built-in template (no id/timestamps — those are assigned on duplication). */
+/** Shape of a built-in template (no id/timestamps — assigned on duplication). */
 export interface ProfileTemplate {
   id: string;
   name: string;
@@ -55,7 +105,7 @@ export interface ProfileTemplate {
   icon: string;
   type: ProfileType;
   defaultCallThresholdBB: number;
-  /** Base range applied to all positions when the template is duplicated. */
-  range: Record<string, RangeAction>;
+  /** Base SituationRange applied to all positions under 'RFI' when duplicated. */
+  baseRange: SituationRange;
   postFlop: PlayerProfile['postFlop'];
 }
