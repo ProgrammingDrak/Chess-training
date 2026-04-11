@@ -4,7 +4,7 @@
     {
       "name": "Chess Opening Trainer (dev)",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["node_modules/vite/bin/vite.js"],
+      "runtimeArgs": ["C:/Users/offic/Chess-training/node_modules/vite/bin/vite.js", "--host"],
       "port": 5173
     },
     {

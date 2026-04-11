@@ -65,12 +65,14 @@ interface PokerHomeProps {
   getDrillStats: (drillType: PokerDrillType) => { totalAttempts: number; correctAttempts: number; accuracy: number };
   onSelectDrill: (drillType: PokerDrillType) => void;
   onViewDashboard: () => void;
+  onViewProfiles: () => void;
   onBack: () => void;
 }
 
 export function PokerHome({
   getDrillStats,
   onSelectDrill,
+  onViewProfiles,
 }: PokerHomeProps) {
   return (
     <div className="poker-home">
@@ -121,6 +123,23 @@ export function PokerHome({
           );
         })}
       </div>
+
+      {/* Profiles section */}
+      <button
+        className="drill-module-card"
+        style={{ gridColumn: '1 / -1', flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
+        onClick={onViewProfiles}
+      >
+        <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>📋</div>
+        <div style={{ flex: 1 }}>
+          <div className="drill-module-name">Player Profiles</div>
+          <div className="drill-module-desc">
+            Build hand-range profiles for yourself and opponents. 4-color action grid (fold/limp/call/raise),
+            per-position ranges, post-flop thresholds. Use them to benchmark decisions against any playing style.
+          </div>
+        </div>
+        <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
+      </button>
 
       {/* GTO Info Section */}
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
