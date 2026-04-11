@@ -10,62 +10,100 @@ import { ACTION_CFG } from './profiles/HandRangeEditor';
 import type { PlayerProfile, RangeAction } from '../../types/profiles';
 import { DEFAULT_ACTION_CONTEXT } from '../../types/profiles';
 
-// ─── Suit config ──────────────────────────────────────────────────────────────
+// ─── Hand text parser ─────────────────────────────────────────────────────────
+//
+// Accepts:  JJ  AKs  AKo  AK  72o  T9s  (case-insensitive, "10" → "T")
+// Returns:  canonical hand key  or  null if invalid
 
-const SUITS = ['♠', '♥', '♦', '♣'] as const;
-type Suit = typeof SUITS[number];
-const SUIT_COLOR: Record<Suit, string> = {
-  '♠': 'var(--text-primary)',
-  '♥': '#e05555',
-  '♦': '#e05555',
-  '♣': 'var(--text-primary)',
-};
+const RANK_SET = new Set(RANKS as unknown as string[]);
 
-// ─── Hand notation ────────────────────────────────────────────────────────────
+function parseHandInput(raw: string): string | null {
+  const s = raw.trim().toUpperCase().replace(/10/g, 'T');
+  if (s.length < 2 || s.length > 3) return null;
+  const r1 = s[0], r2 = s[1];
+  if (!RANK_SET.has(r1) || !RANK_SET.has(r2)) return null;
 
-function getHandNotation(
-  r1: string, s1: Suit,
-  r2: string, s2: Suit,
-): string | null {
-  if (!r1 || !r2) return null;
   if (r1 === r2) {
-    if (s1 === s2) return null; // same card twice
-    return `${r1}${r2}`;        // pair
+    return s.length === 2 ? `${r1}${r2}` : null; // pair only if exactly 2 chars
   }
+
+  const suffix = s.length === 3 ? s[2] : null;
+  if (suffix && suffix !== 'S' && suffix !== 'O') return null;
+
   const idx1 = RANKS.indexOf(r1 as typeof RANKS[number]);
   const idx2 = RANKS.indexOf(r2 as typeof RANKS[number]);
-  const [highR, highS, lowR, lowS] =
-    idx1 < idx2 ? [r1, s1, r2, s2] : [r2, s2, r1, s1];
-  return `${highR}${lowR}${highS === lowS ? 's' : 'o'}`;
+  const [highR, lowR] = idx1 < idx2 ? [r1, r2] : [r2, r1];
+  const suf = suffix ? suffix.toLowerCase() : 's'; // no suffix → default suited
+  const hand = `${highR}${lowR}${suf}`;
+  return HAND_RANK_MAP[hand] !== undefined ? hand : null;
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+// ─── Detect mobile (touch-primary device) ────────────────────────────────────
 
-function CardPicker({
-  rank, suit, label,
-  onRank, onSuit,
+function defaultShowGrid(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+}
+
+// ─── HandPickerGrid ───────────────────────────────────────────────────────────
+// Interactive 13×13 grid — tap a cell to select that hand.
+// Cells are color-coded by the supplied range.
+
+function HandPickerGrid({
+  selectedHand,
+  range,
+  onSelect,
 }: {
-  rank: string; suit: Suit; label: string;
-  onRank: (r: string) => void; onSuit: (s: Suit) => void;
+  selectedHand: string;
+  range: Record<string, RangeAction>;
+  onSelect: (hand: string) => void;
 }) {
   return (
-    <div className="hl-card-picker">
-      <label className="hl-label">{label}</label>
-      <div className="hl-card-selects">
-        <select className="hl-select hl-card-rank-sel" value={rank} onChange={e => onRank(e.target.value)}>
-          {RANKS.map(r => <option key={r} value={r}>{r}</option>)}
-        </select>
-        <select className="hl-select hl-card-suit-sel" value={suit} onChange={e => onSuit(e.target.value as Suit)}>
-          {SUITS.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+    <div className="hlpg-wrapper">
+      {/* Column headers */}
+      <div className="hlpg-col-headers">
+        <div className="hlpg-corner" />
+        {RANKS.map(r => <div key={r} className="hlpg-axis">{r}</div>)}
       </div>
-      <div className="hl-card-display" style={{ color: SUIT_COLOR[suit] }}>
-        <span className="hl-card-rank-display">{rank}</span>
-        <span className="hl-card-suit-display">{suit}</span>
-      </div>
+
+      {RANKS.map((rowRank, row) => (
+        <div key={rowRank} className="hlpg-row">
+          <div className="hlpg-axis">{rowRank}</div>
+          {RANKS.map((_, col) => {
+            const hand = cellHand(row, col);
+            const action = range[hand] ?? 'fold';
+            const cfg = ACTION_CFG[action];
+            const isSelected = hand === selectedHand;
+            const isPair   = row === col;
+            const isSuited = col > row;
+
+            return (
+              <button
+                key={hand}
+                className={[
+                  'hlpg-cell',
+                  isPair ? 'hlpg-pair' : isSuited ? 'hlpg-suited' : 'hlpg-offsuit',
+                  isSelected ? 'hlpg-selected' : '',
+                ].join(' ')}
+                style={{
+                  background: cfg.bg,
+                  borderColor: isSelected ? '#ffffff' : cfg.border,
+                  color: cfg.text,
+                }}
+                onClick={() => onSelect(hand)}
+                title={`${hand}${isSuited ? ' (suited)' : isPair ? ' (pair)' : ' (offsuit)'}`}
+              >
+                {hand}
+              </button>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
+
+// ─── ResultPanel ──────────────────────────────────────────────────────────────
 
 function ResultPanel({
   title, subtitle, action, note, mismatch,
@@ -97,6 +135,8 @@ function ResultPanel({
     </div>
   );
 }
+
+// ─── MiniGrid (display-only) ──────────────────────────────────────────────────
 
 function MiniGrid({
   hand, range,
@@ -135,59 +175,80 @@ interface HandLookupProps {
 }
 
 export function HandLookup({ profiles, onBack }: HandLookupProps) {
-  const [rank1, setRank1] = useState('A');
-  const [suit1, setSuit1] = useState<Suit>('♠');
-  const [rank2, setRank2] = useState('K');
-  const [suit2, setSuit2] = useState<Suit>('♦');
-  const [tableSize, setTableSize] = useState(6);
-  const [position, setPosition] = useState('BTN');
-  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
-  // Pot odds helper (independent of action context)
-  const [facingBetBB, setFacingBetBB] = useState<number>(3);
-  const [potSizeBB, setPotSizeBB] = useState<number>(4.5);
+  // ── Hand input state ────────────────────────────────────────────────────────
+  const [selectedHand, setSelectedHand] = useState<string>('AKs');
+  const [textInput, setTextInput]       = useState<string>('AKs');
+  const [textError, setTextError]       = useState(false);
+  const [showGrid, setShowGrid]         = useState(defaultShowGrid);
 
-  // Keep position valid when table size changes
+  // ── Situation state ─────────────────────────────────────────────────────────
+  const [tableSize, setTableSize]               = useState(6);
+  const [position, setPosition]                 = useState('BTN');
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  const [facingBetBB, setFacingBetBB]           = useState<number>(3);
+  const [potSizeBB, setPotSizeBB]               = useState<number>(4.5);
+
+  // ── Position helpers ────────────────────────────────────────────────────────
   const positions = getPositionsForTableSize(tableSize);
-  const safePosition = positions.includes(position) ? position : (positions.find(p => p === 'BTN') ?? positions[0]);
+  const safePosition = positions.includes(position)
+    ? position
+    : (positions.find(p => p === 'BTN') ?? positions[0]);
 
   const handleTableSizeChange = (n: number) => {
     setTableSize(n);
     const pos = getPositionsForTableSize(n);
-    if (!pos.includes(position)) {
-      setPosition(pos.find(p => p === 'BTN') ?? pos[0]);
-    }
+    if (!pos.includes(position)) setPosition(pos.find(p => p === 'BTN') ?? pos[0]);
   };
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-  const hand = useMemo(() => getHandNotation(rank1, suit1, rank2, suit2), [rank1, suit1, rank2, suit2]);
-  const rank = hand ? (HAND_RANK_MAP[hand] ?? null) : null;
+  // ── Input handlers ──────────────────────────────────────────────────────────
+  function selectFromGrid(hand: string) {
+    setSelectedHand(hand);
+    setTextInput(hand);
+    setTextError(false);
+  }
+
+  function handleTextChange(value: string) {
+    setTextInput(value);
+    const parsed = parseHandInput(value);
+    if (parsed) {
+      setSelectedHand(parsed);
+      setTextError(false);
+    } else if (value.trim() === '') {
+      setTextError(false);
+    } else {
+      setTextError(true);
+    }
+  }
+
+  // ── Derived ─────────────────────────────────────────────────────────────────
+  const rank = HAND_RANK_MAP[selectedHand] ?? null;
   const vpip = suggestedVpip(tableSize, safePosition);
 
-  const gtoRange = useMemo(() => buildRangeFromPercentile(vpip, 'raise'), [vpip]);
-  const gtoAction: RangeAction | null = hand ? (gtoRange[hand] ?? 'fold') : null;
+  const gtoRange    = useMemo(() => buildRangeFromPercentile(vpip, 'raise'), [vpip]);
+  const gtoAction: RangeAction = gtoRange[selectedHand] ?? 'fold';
 
   const selectedProfile = profiles.find(p => p.id === selectedProfileId) ?? null;
-  const profileAction = useMemo((): RangeAction | null => {
-    if (!hand || !selectedProfile) return null;
-    const pos = selectedProfile.positions.find(p => p.position === safePosition);
-    if (!pos) return null;
-    const sit = pos.situations[DEFAULT_ACTION_CONTEXT];
-    return sit ? (sit.range[hand] ?? 'fold') : null;
-  }, [hand, selectedProfile, safePosition]);
 
-  const profileRange = useMemo((): Record<string, RangeAction> => {
+  const profileAction = useMemo((): RangeAction | null => {
+    if (!selectedProfile) return null;
+    const pos = selectedProfile.positions.find(p => p.position === safePosition);
+    const sit = pos?.situations[DEFAULT_ACTION_CONTEXT];
+    return sit ? (sit.range[selectedHand] ?? 'fold') : null;
+  }, [selectedHand, selectedProfile, safePosition]);
+
+  // Range used for both the picker grid and the display mini grid
+  const activeRange = useMemo((): Record<string, RangeAction> => {
     if (!selectedProfile) return gtoRange;
     const pos = selectedProfile.positions.find(p => p.position === safePosition);
-    return pos?.situations[DEFAULT_ACTION_CONTEXT]?.range ?? {};
+    return pos?.situations[DEFAULT_ACTION_CONTEXT]?.range ?? gtoRange;
   }, [selectedProfile, safePosition, gtoRange]);
 
-  // Pot odds
   const potOddsReq = useMemo(() => {
     if (facingBetBB <= 0 || potSizeBB <= 0) return null;
     return (facingBetBB / (potSizeBB + 2 * facingBetBB) * 100).toFixed(1);
   }, [facingBetBB, potSizeBB]);
 
-  const profileMismatch = gtoAction !== null && profileAction !== null && gtoAction !== profileAction;
+  const profileMismatch = profileAction !== null && gtoAction !== profileAction;
 
   const gtoNote = gtoAction === 'raise'
     ? `In the top ${vpip}% GTO opening range for ${safePosition}.`
@@ -200,7 +261,7 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
     : profileAction === 'limp'  ? 'In your limp range (★ fun / not GTO).'
     : 'Not in your range — fold.';
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="hl-wrapper">
       {/* Header */}
@@ -209,7 +270,7 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
         <div>
           <h1 className="hl-title">What Should I Do?</h1>
           <p className="hl-desc">
-            Pick your hole cards and position to get a GTO recommendation
+            Select a hand and position to get a GTO recommendation
             {profiles.length > 0 ? ' and compare it to any saved profile.' : '.'}
           </p>
         </div>
@@ -220,31 +281,73 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
         {/* ── Left: inputs ── */}
         <div className="hl-inputs">
 
-          {/* Hole cards */}
+          {/* ── Hand input section ── */}
           <div className="hl-section">
-            <h3 className="hl-section-title">Your Hole Cards</h3>
-            <div className="hl-cards-row">
-              <CardPicker rank={rank1} suit={suit1} label="Card 1" onRank={setRank1} onSuit={setSuit1} />
-              <CardPicker rank={rank2} suit={suit2} label="Card 2" onRank={setRank2} onSuit={setSuit2} />
-
-              <div className="hl-hand-info">
-                {hand ? (
-                  <>
-                    <div className="hl-hand-notation">{hand}</div>
-                    {rank && <div className="hl-hand-rank">#{rank} of 169</div>}
-                  </>
-                ) : (
-                  <div className="hl-hand-invalid">
-                    {rank1 === rank2 && suit1 === suit2
-                      ? 'Same card twice — change a suit'
-                      : '—'}
-                  </div>
-                )}
+            <div className="hl-hand-header">
+              <h3 className="hl-section-title">Hand</h3>
+              {/* Mode toggle */}
+              <div className="hl-mode-toggle">
+                <button
+                  className={`hl-mode-btn${!showGrid ? ' active' : ''}`}
+                  onClick={() => setShowGrid(false)}
+                  title="Type hand notation (e.g. AKs, JJ, 72o)"
+                >
+                  Text
+                </button>
+                <button
+                  className={`hl-mode-btn${showGrid ? ' active' : ''}`}
+                  onClick={() => setShowGrid(true)}
+                  title="Tap a cell to select a hand"
+                >
+                  Grid
+                </button>
               </div>
             </div>
+
+            {/* Text input — always visible */}
+            <div className="hl-text-input-row">
+              <input
+                className={`hl-text-input${textError ? ' hl-text-error' : ''}`}
+                value={textInput}
+                onChange={e => handleTextChange(e.target.value)}
+                placeholder="e.g. AKs, JJ, 72o, T9s"
+                spellCheck={false}
+                autoComplete="off"
+                autoCapitalize="characters"
+              />
+              <div className="hl-hand-badge">
+                {!textError && selectedHand ? (
+                  <>
+                    <span className="hl-hand-notation">{selectedHand}</span>
+                    {rank && <span className="hl-hand-rank">#{rank}</span>}
+                  </>
+                ) : textError ? (
+                  <span className="hl-hand-invalid">?</span>
+                ) : null}
+              </div>
+            </div>
+            {textError && (
+              <div className="hl-text-hint">
+                Type a hand: <code>AKs</code> <code>AKo</code> <code>AK</code> <code>JJ</code> <code>T9s</code>
+              </div>
+            )}
+
+            {/* Grid picker */}
+            {showGrid && (
+              <div className="hl-grid-picker-wrap">
+                <HandPickerGrid
+                  selectedHand={selectedHand}
+                  range={activeRange}
+                  onSelect={selectFromGrid}
+                />
+                <div className="hl-grid-picker-hint">
+                  Cells colored by {selectedProfile ? `"${selectedProfile.name}"` : 'GTO'} range · tap to select
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Situation */}
+          {/* ── Situation ── */}
           <div className="hl-section">
             <h3 className="hl-section-title">Situation</h3>
             <div className="hl-sit-row">
@@ -257,22 +360,22 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
                 </select>
               </div>
               <div className="hl-sit-field">
-                <label className="hl-label">Your position</label>
+                <label className="hl-label">Position</label>
                 <select className="hl-select" value={safePosition} onChange={e => setPosition(e.target.value)}>
                   {positions.map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
               <div className="hl-sit-field">
-                <label className="hl-label">Action before you</label>
+                <label className="hl-label">Action before</label>
                 <select className="hl-select" disabled>
                   <option>All folded (RFI)</option>
                 </select>
-                <span className="hl-coming-soon">More contexts coming soon</span>
+                <span className="hl-coming-soon">More contexts soon</span>
               </div>
             </div>
           </div>
 
-          {/* Profile compare */}
+          {/* ── Profile compare ── */}
           {profiles.length > 0 && (
             <div className="hl-section">
               <h3 className="hl-section-title">Compare Profile</h3>
@@ -281,7 +384,7 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
                 value={selectedProfileId ?? ''}
                 onChange={e => setSelectedProfileId(e.target.value || null)}
               >
-                <option value="">— No profile —</option>
+                <option value="">— No profile (show GTO) —</option>
                 {profiles.map(p => (
                   <option key={p.id} value={p.id}>
                     {p.name} ({p.type} · {p.tableSize}-max)
@@ -291,12 +394,12 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
             </div>
           )}
 
-          {/* Pot odds helper */}
+          {/* ── Pot odds helper ── */}
           <div className="hl-section">
             <h3 className="hl-section-title">Pot Odds Helper</h3>
             <div className="hl-potodds-row">
               <div className="hl-sit-field">
-                <label className="hl-label">Pot size (BB)</label>
+                <label className="hl-label">Pot (BB)</label>
                 <input
                   type="number" min={0.5} step={0.5}
                   className="hl-num-input"
@@ -326,51 +429,42 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
 
         {/* ── Right: results ── */}
         <div className="hl-results">
-          {hand ? (
-            <>
-              <ResultPanel
-                title="GTO Recommendation"
-                subtitle={`${safePosition} · RFI · ${tableSize}-max · top ${vpip}% range`}
-                action={gtoAction}
-                note={gtoNote}
-              />
+          <ResultPanel
+            title="GTO Recommendation"
+            subtitle={`${safePosition} · RFI · ${tableSize}-max · top ${vpip}% range`}
+            action={gtoAction}
+            note={gtoNote}
+          />
 
-              {selectedProfile && (
-                <ResultPanel
-                  title={`"${selectedProfile.name}"`}
-                  subtitle={`${safePosition} · RFI · ${selectedProfile.tableSize}-max profile`}
-                  action={profileAction}
-                  note={profileNote}
-                  mismatch={profileMismatch}
-                />
-              )}
-
-              <div className="hl-grid-section">
-                <div className="hl-grid-label">
-                  {selectedProfile
-                    ? `${selectedProfile.name} — ${safePosition} RFI range`
-                    : `GTO range — ${safePosition} in ${tableSize}-max`}
-                  <span className="hl-grid-legend"> (highlighted: {hand})</span>
-                </div>
-                <MiniGrid hand={hand} range={profileRange} />
-                <div className="hl-grid-legend-row">
-                  {(['fold', 'call', 'raise', 'limp'] as RangeAction[]).map(a => {
-                    const cfg = ACTION_CFG[a];
-                    return (
-                      <span key={a} className="hl-legend-chip" style={{ color: cfg.text, borderColor: cfg.border }}>
-                        {cfg.emoji} {cfg.label}
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="hl-empty">
-              <div className="hl-empty-icon">🃏</div>
-              <p className="hl-empty-text">Pick two hole cards to see the recommendation.</p>
-            </div>
+          {selectedProfile && (
+            <ResultPanel
+              title={`"${selectedProfile.name}"`}
+              subtitle={`${safePosition} · RFI · ${selectedProfile.tableSize}-max profile`}
+              action={profileAction}
+              note={profileNote}
+              mismatch={profileMismatch}
+            />
           )}
+
+          <div className="hl-grid-section">
+            <div className="hl-grid-label">
+              {selectedProfile
+                ? `${selectedProfile.name} — ${safePosition} RFI range`
+                : `GTO range — ${safePosition} in ${tableSize}-max`}
+              <span className="hl-grid-legend"> · {selectedHand} highlighted</span>
+            </div>
+            <MiniGrid hand={selectedHand} range={activeRange} />
+            <div className="hl-grid-legend-row">
+              {(['fold', 'call', 'raise', 'limp'] as RangeAction[]).map(a => {
+                const cfg = ACTION_CFG[a];
+                return (
+                  <span key={a} className="hl-legend-chip" style={{ color: cfg.text, borderColor: cfg.border }}>
+                    {cfg.emoji} {cfg.label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
       </div>
