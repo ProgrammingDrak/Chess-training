@@ -66,6 +66,7 @@ interface PokerHomeProps {
   onSelectDrill: (drillType: PokerDrillType) => void;
   onViewDashboard: () => void;
   onViewProfiles: () => void;
+  onViewHandLookup: () => void;
   onBack: () => void;
 }
 
@@ -73,6 +74,7 @@ export function PokerHome({
   getDrillStats,
   onSelectDrill,
   onViewProfiles,
+  onViewHandLookup,
 }: PokerHomeProps) {
   return (
     <div className="poker-home">
@@ -124,10 +126,25 @@ export function PokerHome({
         })}
       </div>
 
-      {/* Profiles section */}
+      {/* Tools section: Hand Lookup + Profiles */}
       <button
         className="drill-module-card"
-        style={{ gridColumn: '1 / -1', flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
+        onClick={onViewHandLookup}
+      >
+        <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>🔎</div>
+        <div style={{ flex: 1 }}>
+          <div className="drill-module-name">What Should I Do?</div>
+          <div className="drill-module-desc">
+            Pick your hole cards, position, and table size. Get the GTO recommendation for RFI and compare
+            it to any saved profile — with the hand highlighted on the range grid.
+          </div>
+        </div>
+        <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
+      </button>
+      <button
+        className="drill-module-card"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
         onClick={onViewProfiles}
       >
         <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>📋</div>
