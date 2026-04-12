@@ -187,6 +187,9 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [facingBetBB, setFacingBetBB]           = useState<number>(3);
   const [potSizeBB, setPotSizeBB]               = useState<number>(4.5);
+  // Raw string state so the inputs don't snap while the user is mid-type
+  const [facingBetRaw, setFacingBetRaw]         = useState('3');
+  const [potSizeRaw, setPotSizeRaw]             = useState('4.5');
 
   // ── Position helpers ────────────────────────────────────────────────────────
   const positions = getPositionsForTableSize(tableSize);
@@ -401,19 +404,29 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
               <div className="hl-sit-field">
                 <label className="hl-label">Pot (BB)</label>
                 <input
-                  type="number" min={0.5} step={0.5}
+                  type="number" min={0} step={0.5}
                   className="hl-num-input"
-                  value={potSizeBB}
-                  onChange={e => setPotSizeBB(Math.max(0.5, Number(e.target.value)))}
+                  value={potSizeRaw}
+                  onChange={e => setPotSizeRaw(e.target.value)}
+                  onBlur={e => {
+                    const v = Math.max(0.5, Number(e.target.value) || 0.5);
+                    setPotSizeBB(v);
+                    setPotSizeRaw(String(v));
+                  }}
                 />
               </div>
               <div className="hl-sit-field">
                 <label className="hl-label">Facing bet (BB)</label>
                 <input
-                  type="number" min={0.5} step={0.5}
+                  type="number" min={0} step={0.5}
                   className="hl-num-input"
-                  value={facingBetBB}
-                  onChange={e => setFacingBetBB(Math.max(0.5, Number(e.target.value)))}
+                  value={facingBetRaw}
+                  onChange={e => setFacingBetRaw(e.target.value)}
+                  onBlur={e => {
+                    const v = Math.max(0.5, Number(e.target.value) || 0.5);
+                    setFacingBetBB(v);
+                    setFacingBetRaw(String(v));
+                  }}
                 />
               </div>
               {potOddsReq && (
