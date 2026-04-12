@@ -47,6 +47,9 @@ let pool = null;
 if (hasDb) {
   try {
     const { default: pgPool } = await import('./db/pool.js');
+    // Probe connectivity before wiring PgSession — a dead pool here would
+    // cause every request to error on session store access.
+    await pgPool.query('SELECT 1');
     const { default: connectPgSimple } = await import('connect-pg-simple');
     const PgSession = connectPgSimple(session);
     pool = pgPool;
@@ -56,8 +59,9 @@ if (hasDb) {
       createTableIfMissing: true,
     });
   } catch (err) {
-    console.error('[server] Failed to load database modules — falling back to MemoryStore:', err.message);
+    console.error('[server] Database unreachable — falling back to MemoryStore:', err.message);
     hasDb = false;
+    pool = null;
   }
 } else {
   console.warn('[server] DATABASE_URL not set — using MemoryStore for sessions, auth endpoints disabled');
@@ -298,8 +302,8 @@ async function start() {
     try {
       await initSchema(pool);
     } catch (err) {
-      console.error('[db] Schema init failed:', err);
-      process.exit(1);
+      console.error('[db] Schema init failed — disabling DB features:', err.message);
+      hasDb = false;
     }
   }
 
