@@ -22,7 +22,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 const isProd = process.env.NODE_ENV === 'production';
-const hasDb = Boolean(process.env.DATABASE_URL);
+let hasDb = Boolean(process.env.DATABASE_URL);
 
 const BCRYPT_ROUNDS = 12;
 
@@ -45,15 +45,20 @@ let sessionStore = undefined; // undefined → Express MemoryStore
 let pool = null;
 
 if (hasDb) {
-  const { default: pgPool } = await import('./db/pool.js');
-  const { default: connectPgSimple } = await import('connect-pg-simple');
-  const PgSession = connectPgSimple(session);
-  pool = pgPool;
-  sessionStore = new PgSession({
-    pool,
-    tableName: 'sessions',
-    createTableIfMissing: true,
-  });
+  try {
+    const { default: pgPool } = await import('./db/pool.js');
+    const { default: connectPgSimple } = await import('connect-pg-simple');
+    const PgSession = connectPgSimple(session);
+    pool = pgPool;
+    sessionStore = new PgSession({
+      pool,
+      tableName: 'sessions',
+      createTableIfMissing: true,
+    });
+  } catch (err) {
+    console.error('[server] Failed to load database modules — falling back to MemoryStore:', err.message);
+    hasDb = false;
+  }
 } else {
   console.warn('[server] DATABASE_URL not set — using MemoryStore for sessions, auth endpoints disabled');
 }
