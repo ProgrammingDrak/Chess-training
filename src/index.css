@@ -4813,14 +4813,6 @@ button {
 /* Profile selector */
 .hl-profile-sel { width: 100%; }
 
-/* Pot odds */
-.hl-potodds-row {
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
-  flex-wrap: wrap;
-}
-
 .hl-num-input {
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -4829,28 +4821,6 @@ button {
   padding: 6px 8px;
   font-size: 0.83rem;
   width: 72px;
-}
-
-.hl-potodds-result {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-bottom: 4px;
-}
-
-.hl-potodds-label {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.hl-potodds-value {
-  font-size: 1.4rem;
-  font-weight: 800;
-  color: var(--accent);
-  font-family: var(--mono);
 }
 
 /* Result panels */
@@ -5096,6 +5066,80 @@ button {
   font-family: var(--mono);
   font-size: 0.72rem;
   color: var(--accent-hover);
+}
+
+/* ── Pot odds preset chips ───────────────────────────────────────────────────── */
+
+.hl-po-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hl-po-chip {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.hl-po-chip:hover {
+  background: var(--bg-3);
+  color: var(--text-primary);
+}
+.hl-po-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.hl-po-chip-custom {
+  border-style: dashed;
+}
+.hl-po-chip-custom.active {
+  border-style: solid;
+}
+
+.hl-po-custom-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+.hl-po-result {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.hl-po-formula {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+.hl-po-value {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--accent);
+  font-family: var(--mono);
+  line-height: 1;
+}
+
+.hl-po-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
 }
 
 /* ── HandPickerGrid ──────────────────────────────────────────────────────────── */

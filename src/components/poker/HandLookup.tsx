@@ -185,11 +185,12 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
   const [tableSize, setTableSize]               = useState(6);
   const [position, setPosition]                 = useState('BTN');
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
-  const [facingBetBB, setFacingBetBB]           = useState<number>(3);
-  const [potSizeBB, setPotSizeBB]               = useState<number>(4.5);
-  // Raw string state so the inputs don't snap while the user is mid-type
-  const [facingBetRaw, setFacingBetRaw]         = useState('3');
-  const [potSizeRaw, setPotSizeRaw]             = useState('4.5');
+  // Pot odds: preset fraction key (null = custom) + custom raw strings
+  const [potPreset, setPotPreset]               = useState<string | null>('1/2');
+  const [customPotRaw, setCustomPotRaw]         = useState('4.5');
+  const [customBetRaw, setCustomBetRaw]         = useState('3');
+  const [customPot, setCustomPot]               = useState(4.5);
+  const [customBet, setCustomBet]               = useState(3);
 
   // ── Position helpers ────────────────────────────────────────────────────────
   const positions = getPositionsForTableSize(tableSize);
@@ -246,10 +247,32 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
     return pos?.situations[DEFAULT_ACTION_CONTEXT]?.range ?? gtoRange;
   }, [selectedProfile, safePosition, gtoRange]);
 
-  const potOddsReq = useMemo(() => {
-    if (facingBetBB <= 0 || potSizeBB <= 0) return null;
-    return (facingBetBB / (potSizeBB + 2 * facingBetBB) * 100).toFixed(1);
-  }, [facingBetBB, potSizeBB]);
+  // Pot odds: fraction→equity for preset chips (bet / (pot + bet) where pot=1 unit)
+  const POT_PRESETS: { key: string; label: string; fraction: number }[] = [
+    { key: '1/4', label: '¼ pot',  fraction: 0.25 },
+    { key: '1/3', label: '⅓ pot',  fraction: 1/3  },
+    { key: '1/2', label: '½ pot',  fraction: 0.5  },
+    { key: '2/3', label: '⅔ pot',  fraction: 2/3  },
+    { key: '3/4', label: '¾ pot',  fraction: 0.75 },
+    { key: 'pot', label: 'Pot',    fraction: 1.0  },
+    { key: '2x',  label: '2× Pot', fraction: 2.0  },
+  ];
+
+  const potOddsResult = useMemo(() => {
+    if (potPreset === null) {
+      // Custom
+      if (customBet <= 0 || customPot <= 0) return null;
+      const eq = customBet / (customPot + customBet) * 100;
+      return { eq: eq.toFixed(1), formula: `${customBet} / (${customPot} + ${customBet})` };
+    }
+    const preset = POT_PRESETS.find(p => p.key === potPreset);
+    if (!preset) return null;
+    const f = preset.fraction;
+    const eq = f / (1 + f) * 100;
+    const betStr  = f === 1/3 ? '1' : f === 2/3 ? '2' : String(f);
+    const potStr  = f === 1/3 ? '3' : f === 2/3 ? '3' : '1';
+    return { eq: eq.toFixed(1), formula: `${betStr} / (${potStr} + ${betStr})` };
+  }, [potPreset, customBet, customPot]);
 
   const profileMismatch = profileAction !== null && gtoAction !== profileAction;
 
@@ -400,42 +423,68 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
           {/* ── Pot odds helper ── */}
           <div className="hl-section">
             <h3 className="hl-section-title">Pot Odds Helper</h3>
-            <div className="hl-potodds-row">
-              <div className="hl-sit-field">
-                <label className="hl-label">Pot (BB)</label>
-                <input
-                  type="number" min={0} step={0.5}
-                  className="hl-num-input"
-                  value={potSizeRaw}
-                  onChange={e => setPotSizeRaw(e.target.value)}
-                  onBlur={e => {
-                    const v = Math.max(0.5, Number(e.target.value) || 0.5);
-                    setPotSizeBB(v);
-                    setPotSizeRaw(String(v));
-                  }}
-                />
-              </div>
-              <div className="hl-sit-field">
-                <label className="hl-label">Facing bet (BB)</label>
-                <input
-                  type="number" min={0} step={0.5}
-                  className="hl-num-input"
-                  value={facingBetRaw}
-                  onChange={e => setFacingBetRaw(e.target.value)}
-                  onBlur={e => {
-                    const v = Math.max(0.5, Number(e.target.value) || 0.5);
-                    setFacingBetBB(v);
-                    setFacingBetRaw(String(v));
-                  }}
-                />
-              </div>
-              {potOddsReq && (
-                <div className="hl-potodds-result">
-                  <span className="hl-potodds-label">Required equity</span>
-                  <span className="hl-potodds-value">{potOddsReq}%</span>
-                </div>
-              )}
+
+            {/* Preset chips */}
+            <div className="hl-po-chips">
+              {POT_PRESETS.map(p => (
+                <button
+                  key={p.key}
+                  className={`hl-po-chip${potPreset === p.key ? ' active' : ''}`}
+                  onClick={() => setPotPreset(p.key)}
+                >
+                  {p.label}
+                </button>
+              ))}
+              <button
+                className={`hl-po-chip hl-po-chip-custom${potPreset === null ? ' active' : ''}`}
+                onClick={() => setPotPreset(null)}
+              >
+                Custom…
+              </button>
             </div>
+
+            {/* Custom inputs — shown only when Custom is selected */}
+            {potPreset === null && (
+              <div className="hl-po-custom-row">
+                <div className="hl-sit-field">
+                  <label className="hl-label">Pot (BB)</label>
+                  <input
+                    type="number" min={0} step={0.5}
+                    className="hl-num-input"
+                    value={customPotRaw}
+                    onChange={e => setCustomPotRaw(e.target.value)}
+                    onBlur={e => {
+                      const v = Math.max(0.5, Number(e.target.value) || 0.5);
+                      setCustomPot(v);
+                      setCustomPotRaw(String(v));
+                    }}
+                  />
+                </div>
+                <div className="hl-sit-field">
+                  <label className="hl-label">Facing bet (BB)</label>
+                  <input
+                    type="number" min={0} step={0.5}
+                    className="hl-num-input"
+                    value={customBetRaw}
+                    onChange={e => setCustomBetRaw(e.target.value)}
+                    onBlur={e => {
+                      const v = Math.max(0.5, Number(e.target.value) || 0.5);
+                      setCustomBet(v);
+                      setCustomBetRaw(String(v));
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Result */}
+            {potOddsResult && (
+              <div className="hl-po-result">
+                <span className="hl-po-formula">{potOddsResult.formula} =</span>
+                <span className="hl-po-value">{potOddsResult.eq}%</span>
+                <span className="hl-po-label">equity needed to call</span>
+              </div>
+            )}
           </div>
 
         </div>
