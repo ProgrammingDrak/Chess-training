@@ -5,6 +5,8 @@ import type { BlackjackDrillType } from './types/blackjack';
 import { useProgress } from './hooks/useProgress';
 import { usePokerProgress } from './hooks/usePokerProgress';
 import { useBlackjackProgress } from './hooks/useBlackjackProgress';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { AuthModal } from './components/auth/AuthModal';
 import { GameSelector } from './components/GameSelector';
 import { OpeningSelector } from './components/OpeningSelector';
 import { LineSelector } from './components/LineSelector';
@@ -33,9 +35,40 @@ function getInitialTheme(): 'dark' | 'light' {
   return 'dark';
 }
 
-export default function App() {
+// ── Nav auth button ───────────────────────────────────────────────────────────
+
+function AuthButton({ onOpenModal }: { onOpenModal: () => void }) {
+  const { user, loading, logout } = useAuth();
+
+  if (user) {
+    return (
+      <div className="nav-auth">
+        <span className="nav-username">{user.username}</span>
+        <button className="nav-link nav-logout" onClick={logout}>
+          Log Out
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      className="nav-link nav-login"
+      onClick={onOpenModal}
+      disabled={loading}
+      style={loading ? { opacity: 0.45 } : undefined}
+    >
+      Log In
+    </button>
+  );
+}
+
+// ── Main app (inner — must be inside AuthProvider) ────────────────────────────
+
+function AppInner() {
   const [theme, setTheme] = useState<'dark' | 'light'>(getInitialTheme);
   const [view, setView] = useState<AppView>('home');
+  const [showAuth, setShowAuth] = useState(false);
   const [selectedOpening, setSelectedOpening] = useState<Opening | null>(null);
   const [practiceLineIndex, setPracticeLineIndex] = useState(0);
   const [pokerDrillType, setPokerDrillType] = useState<PokerDrillType | null>(null);
@@ -177,7 +210,8 @@ export default function App() {
             </>
           )}
 
-          {/* Theme toggle — always visible */}
+          {/* Auth + Theme — always visible */}
+          <AuthButton onOpenModal={() => setShowAuth(true)} />
           <button
             className="theme-toggle"
             onClick={toggleTheme}
@@ -310,6 +344,17 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* Auth modal */}
+      {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppInner />
+    </AuthProvider>
   );
 }

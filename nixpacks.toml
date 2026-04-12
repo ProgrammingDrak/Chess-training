@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["nodejs_22", "npm-9_x"]
+nixPkgs = ["nodejs_22"]
 
 [phases.install]
 cmds = ["npm install --ignore-engines"]
@@ -8,4 +8,4 @@ cmds = ["npm install --ignore-engines"]
 cmds = ["npm run build"]
 
 [start]
-cmd = "caddy file-server --root /app/dist --listen :$PORT"
+cmd = "node server.js"

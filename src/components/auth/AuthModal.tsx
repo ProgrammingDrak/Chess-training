@@ -1,0 +1,122 @@
+import { useState, useRef, useEffect } from 'react';
+import { useAuth } from '../../contexts/AuthContext';
+
+interface AuthModalProps {
+  onClose: () => void;
+}
+
+type Tab = 'login' | 'register';
+
+export function AuthModal({ onClose }: AuthModalProps) {
+  const { login, register } = useAuth();
+  const [tab, setTab] = useState<Tab>('login');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [tab]);
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    setSubmitting(true);
+    try {
+      if (tab === 'login') {
+        await login(username, password);
+      } else {
+        await register(username, password);
+      }
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="auth-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="auth-modal" role="dialog" aria-modal="true" aria-label={tab === 'login' ? 'Log in' : 'Create account'}>
+        <button className="auth-close" onClick={onClose} aria-label="Close">×</button>
+
+        <div className="auth-tabs">
+          <button
+            className={`auth-tab ${tab === 'login' ? 'active' : ''}`}
+            onClick={() => { setTab('login'); setError(''); }}
+          >
+            Log In
+          </button>
+          <button
+            className={`auth-tab ${tab === 'register' ? 'active' : ''}`}
+            onClick={() => { setTab('register'); setError(''); }}
+          >
+            Register
+          </button>
+        </div>
+
+        <form className="auth-form" onSubmit={handleSubmit} noValidate>
+          <div className="auth-field">
+            <label htmlFor="auth-username">Username</label>
+            <input
+              id="auth-username"
+              ref={inputRef}
+              type="text"
+              autoComplete={tab === 'login' ? 'username' : 'username'}
+              value={username}
+              onChange={(e) => setUsername(e.target.value.toLowerCase())}
+              placeholder={tab === 'register' ? 'letters, numbers, _ or -' : ''}
+              required
+            />
+          </div>
+
+          <div className="auth-field">
+            <label htmlFor="auth-password">Password</label>
+            <input
+              id="auth-password"
+              type="password"
+              autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={tab === 'register' ? 'at least 8 characters' : ''}
+              required
+            />
+          </div>
+
+          {error && <p className="auth-error">{error}</p>}
+
+          <button className="auth-submit" type="submit" disabled={submitting}>
+            {submitting ? '…' : tab === 'login' ? 'Log In' : 'Create Account'}
+          </button>
+        </form>
+
+        {tab === 'login' && (
+          <p className="auth-footer">
+            No account?{' '}
+            <button className="auth-link" onClick={() => { setTab('register'); setError(''); }}>
+              Register
+            </button>
+          </p>
+        )}
+        {tab === 'register' && (
+          <p className="auth-footer">
+            Already have one?{' '}
+            <button className="auth-link" onClick={() => { setTab('login'); setError(''); }}>
+              Log In
+            </button>
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
