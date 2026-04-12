@@ -65,12 +65,16 @@ interface PokerHomeProps {
   getDrillStats: (drillType: PokerDrillType) => { totalAttempts: number; correctAttempts: number; accuracy: number };
   onSelectDrill: (drillType: PokerDrillType) => void;
   onViewDashboard: () => void;
+  onViewProfiles: () => void;
+  onViewHandLookup: () => void;
   onBack: () => void;
 }
 
 export function PokerHome({
   getDrillStats,
   onSelectDrill,
+  onViewProfiles,
+  onViewHandLookup,
 }: PokerHomeProps) {
   return (
     <div className="poker-home">
@@ -121,6 +125,38 @@ export function PokerHome({
           );
         })}
       </div>
+
+      {/* Tools section: Hand Lookup + Profiles */}
+      <button
+        className="drill-module-card"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
+        onClick={onViewHandLookup}
+      >
+        <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>🔎</div>
+        <div style={{ flex: 1 }}>
+          <div className="drill-module-name">What Should I Do?</div>
+          <div className="drill-module-desc">
+            Pick your hole cards, position, and table size. Get the GTO recommendation for RFI and compare
+            it to any saved profile — with the hand highlighted on the range grid.
+          </div>
+        </div>
+        <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
+      </button>
+      <button
+        className="drill-module-card"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
+        onClick={onViewProfiles}
+      >
+        <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>📋</div>
+        <div style={{ flex: 1 }}>
+          <div className="drill-module-name">Player Profiles</div>
+          <div className="drill-module-desc">
+            Build hand-range profiles for yourself and opponents. 4-color action grid (fold/limp/call/raise),
+            per-position ranges, post-flop thresholds. Use them to benchmark decisions against any playing style.
+          </div>
+        </div>
+        <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
+      </button>
 
       {/* GTO Info Section */}
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>

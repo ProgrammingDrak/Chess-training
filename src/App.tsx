@@ -14,12 +14,15 @@ import { Dashboard } from './components/Dashboard';
 import { PokerHome } from './components/poker/PokerHome';
 import { PokerDrillRouter } from './components/poker/PokerDrillRouter';
 import { PokerDashboard } from './components/poker/PokerDashboard';
+import { ProfilesHome } from './components/poker/profiles/ProfilesHome';
+import { HandLookup } from './components/poker/HandLookup';
+import { usePlayerProfiles } from './hooks/usePlayerProfiles';
 import { BlackjackHome } from './components/blackjack/BlackjackHome';
 import { BlackjackDrillRouter } from './components/blackjack/BlackjackDrillRouter';
 import { BlackjackDashboard } from './components/blackjack/BlackjackDashboard';
 
 const CHESS_VIEWS: AppView[] = ['chess_home', 'opening_detail', 'practice', 'challenge', 'dashboard'];
-const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drill', 'poker_dashboard'];
+const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup'];
 const BLACKJACK_VIEWS: AppView[] = ['blackjack_home', 'blackjack_drill', 'blackjack_dashboard'];
 
 function getInitialTheme(): 'dark' | 'light' {
@@ -41,6 +44,7 @@ export default function App() {
   const { progress, recordAttempt, resetProgress } = useProgress();
   const { progress: pokerProgress, recordAttempt: recordPokerAttempt, resetProgress: resetPokerProgress, getDrillStats } = usePokerProgress();
   const { progress: bjProgress, recordAttempt: recordBJAttempt, resetProgress: resetBJProgress, getDrillStats: getBJDrillStats } = useBlackjackProgress();
+  const { profiles, saveProfile, deleteProfile, duplicateTemplate } = usePlayerProfiles();
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -130,6 +134,18 @@ export default function App() {
                 onClick={() => setView('poker_home')}
               >
                 ♠ Poker GTO
+              </button>
+              <button
+                className={`nav-link ${view === 'poker_profiles' ? 'active' : ''}`}
+                onClick={() => setView('poker_profiles')}
+              >
+                Profiles
+              </button>
+              <button
+                className={`nav-link ${view === 'poker_hand_lookup' ? 'active' : ''}`}
+                onClick={() => setView('poker_hand_lookup')}
+              >
+                Hand Lookup
               </button>
               <button
                 className={`nav-link ${view === 'poker_dashboard' ? 'active' : ''}`}
@@ -228,6 +244,8 @@ export default function App() {
             getDrillStats={getDrillStats}
             onSelectDrill={handleSelectPokerDrill}
             onViewDashboard={() => setView('poker_dashboard')}
+            onViewProfiles={() => setView('poker_profiles')}
+            onViewHandLookup={() => setView('poker_hand_lookup')}
             onBack={() => setView('home')}
           />
         )}
@@ -244,6 +262,23 @@ export default function App() {
           <PokerDashboard
             pokerProgress={pokerProgress}
             onReset={resetPokerProgress}
+            onBack={() => setView('poker_home')}
+          />
+        )}
+
+        {view === 'poker_profiles' && (
+          <ProfilesHome
+            profiles={profiles}
+            onSaveProfile={saveProfile}
+            onDeleteProfile={deleteProfile}
+            onDuplicateTemplate={duplicateTemplate}
+            onBack={() => setView('poker_home')}
+          />
+        )}
+
+        {view === 'poker_hand_lookup' && (
+          <HandLookup
+            profiles={profiles}
             onBack={() => setView('poker_home')}
           />
         )}
