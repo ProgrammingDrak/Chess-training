@@ -9,9 +9,9 @@ import { ProfileEditor } from './ProfileEditor';
 
 interface ProfilesHomeProps {
   profiles: PlayerProfile[];
-  onSaveProfile: (p: PlayerProfile) => void;
-  onDeleteProfile: (id: string) => void;
-  onDuplicateTemplate: (templateId: string, name: string, tableSize: number) => PlayerProfile;
+  onSaveProfile: (p: PlayerProfile) => Promise<PlayerProfile> | void;
+  onDeleteProfile: (id: string) => Promise<void> | void;
+  onDuplicateTemplate: (templateId: string, name: string, tableSize: number) => Promise<PlayerProfile>;
   onBack: () => void;
 }
 
@@ -83,9 +83,13 @@ export function ProfilesHome({
               </span>
               <button
                 className="btn-secondary profiles-tpl-btn"
-                onClick={() => {
-                  const p = onDuplicateTemplate(tpl.id, `My ${tpl.name}`, 6);
-                  setEditing(p);
+                onClick={async () => {
+                  try {
+                    const p = await onDuplicateTemplate(tpl.id, `My ${tpl.name}`, 6);
+                    setEditing(p);
+                  } catch (err) {
+                    alert(`Failed to create profile: ${(err as Error).message}`);
+                  }
                 }}
               >
                 Use Template →
