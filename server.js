@@ -34,6 +34,11 @@ async function initSchema(pool) {
   console.log('[db] Schema initialized');
 }
 
+// Render (and most PaaS) terminate TLS at a proxy and forward as HTTP.
+// Without this, Express sees req.protocol as 'http' and silently drops
+// secure cookies. Required for express-session to issue Set-Cookie in prod.
+if (isProd) app.set('trust proxy', 1);
+
 // ── Middleware ────────────────────────────────────────────────────────────────
 
 app.use(express.json());
