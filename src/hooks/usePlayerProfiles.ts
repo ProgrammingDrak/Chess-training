@@ -127,7 +127,42 @@ export function usePlayerProfiles() {
           const res = await fetch('/api/profiles', { credentials: 'include' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json() as { profiles: ServerProfileRow[] };
-          if (!cancelled) setProfiles(data.profiles.map(fromServerRow));
+          const serverProfiles = data.profiles.map(fromServerRow);
+
+          // One-time migration: if the server has no profiles but there are
+          // profiles in localStorage, POST them up and clear local storage.
+          // Gated on server-empty so re-login doesn't duplicate.
+          if (serverProfiles.length === 0) {
+            const local = loadLocalProfiles();
+            if (local.length > 0) {
+              const migrated: PlayerProfile[] = [];
+              for (const p of local) {
+                try {
+                  const r = await fetch('/api/profiles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify(toServerPayload(p)),
+                  });
+                  if (r.ok) {
+                    const { profile } = await r.json() as { profile: ServerProfileRow };
+                    migrated.push(fromServerRow(profile));
+                  }
+                } catch (err) {
+                  console.error('[profiles] migration skipped one:', err);
+                }
+              }
+              if (migrated.length > 0) {
+                try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+                console.info(`[profiles] migrated ${migrated.length} profile(s) from localStorage to server`);
+              }
+              if (!cancelled) setProfiles(migrated);
+            } else {
+              if (!cancelled) setProfiles([]);
+            }
+          } else {
+            if (!cancelled) setProfiles(serverProfiles);
+          }
         } catch (err) {
           console.error('[profiles] load failed:', err);
           if (!cancelled) setProfiles([]);

@@ -278,15 +278,16 @@ app.delete('/api/profiles/:id', requireDb, requireAuth, async (req, res) => {
 
 // ── Health check ──────────────────────────────────────────────────────────────
 
+const COMMIT = process.env.RENDER_GIT_COMMIT?.slice(0, 7) ?? 'local';
+
 app.get('/api/health', async (_req, res) => {
-  if (!hasDb) {
-    return res.json({ ok: true, db: 'not configured' });
-  }
+  const base = { ok: true, commit: COMMIT, trustProxy: app.get('trust proxy') || false };
+  if (!hasDb) return res.json({ ...base, db: 'not configured' });
   try {
     await pool.query('SELECT 1');
-    res.json({ ok: true, db: 'connected' });
+    res.json({ ...base, db: 'connected' });
   } catch {
-    res.status(500).json({ ok: false, db: 'error' });
+    res.status(500).json({ ok: false, commit: COMMIT, db: 'error' });
   }
 });
 
