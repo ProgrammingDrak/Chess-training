@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: gto-trainer
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: node server.js
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
