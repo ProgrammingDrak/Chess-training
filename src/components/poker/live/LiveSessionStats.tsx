@@ -1,0 +1,107 @@
+import { useEffect, useState } from 'react';
+import type { LiveSession } from '../../../types/liveSession';
+import type { PlayerProfile } from '../../../types/profiles';
+import { computeStats } from '../../../utils/livePoker';
+
+interface LiveSessionStatsProps {
+  session: LiveSession;
+  profiles: PlayerProfile[];
+  /** When true, ticks the elapsed-time clock once per second. */
+  liveTicker?: boolean;
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m ${s}s`;
+}
+
+export function LiveSessionStats({ session, profiles, liveTicker }: LiveSessionStatsProps) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!liveTicker || session.endedAt) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [liveTicker, session.endedAt]);
+
+  const stats = computeStats(session, now);
+  const profileName = (id: string) =>
+    profiles.find(p => p.id === id)?.name ?? `Player ${id.slice(0, 6)}`;
+
+  return (
+    <div className="live-stats">
+      <div className="live-stats-headline">
+        <div className="live-stats-stat">
+          <div className="live-stats-stat-value">{stats.totalHands}</div>
+          <div className="live-stats-stat-label">Hands</div>
+        </div>
+        <div className="live-stats-stat">
+          <div className="live-stats-stat-value">{stats.handsPerHour.toFixed(1)}</div>
+          <div className="live-stats-stat-label">Hands / hr</div>
+        </div>
+        <div className="live-stats-stat">
+          <div className="live-stats-stat-value">{formatElapsed(stats.elapsedMs)}</div>
+          <div className="live-stats-stat-label">Elapsed</div>
+        </div>
+      </div>
+
+      <div className="live-stats-grid">
+        <section className="live-stats-section">
+          <h3 className="live-stats-section-title">Win % per player</h3>
+          {stats.byPlayer.length === 0 ? (
+            <p className="live-stats-empty">No hands played yet.</p>
+          ) : (
+            <table className="live-stats-table">
+              <thead>
+                <tr><th>Player</th><th>Won</th><th>Played</th><th>Win %</th></tr>
+              </thead>
+              <tbody>
+                {stats.byPlayer
+                  .slice()
+                  .sort((a, b) => b.winPct - a.winPct)
+                  .map(p => (
+                    <tr key={p.playerProfileId}>
+                      <td>{profileName(p.playerProfileId)}</td>
+                      <td>{p.handsWon}</td>
+                      <td>{p.handsDealtIn}</td>
+                      <td>{p.winPct.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        <section className="live-stats-section">
+          <h3 className="live-stats-section-title">Win % by position</h3>
+          {stats.byPosition.length === 0 ? (
+            <p className="live-stats-empty">No hands played yet.</p>
+          ) : (
+            <table className="live-stats-table">
+              <thead>
+                <tr><th>Position</th><th>Won</th><th>Played</th><th>Win %</th></tr>
+              </thead>
+              <tbody>
+                {stats.byPosition
+                  .slice()
+                  .sort((a, b) => b.winPct - a.winPct)
+                  .map(p => (
+                    <tr key={p.position}>
+                      <td>{p.position}</td>
+                      <td>{p.handsWonAtPosition}</td>
+                      <td>{p.handsAtPosition}</td>
+                      <td>{p.winPct.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}

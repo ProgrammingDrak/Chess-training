@@ -276,6 +276,74 @@ app.delete('/api/profiles/:id', requireDb, requireAuth, async (req, res) => {
   }
 });
 
+// ── Live Sessions (in-person tracker) ─────────────────────────────────────────
+//
+// UPSERT semantics by client_id (UUID).  This lets the client write to
+// localStorage immediately, queue a sync, and PUT whenever it has a
+// connection — without races between offline devices.
+
+app.get('/api/live-sessions', requireDb, requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM live_sessions WHERE user_id = $1 ORDER BY started_at DESC',
+      [req.session.userId]
+    );
+    res.json({ sessions: rows });
+  } catch (err) {
+    console.error('[live-sessions] list error:', err);
+    res.status(500).json({ error: 'Failed to load sessions' });
+  }
+});
+
+app.put('/api/live-sessions/:clientId', requireDb, requireAuth, async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const { name, started_at, ended_at, table_size, data } = req.body ?? {};
+    if (!started_at || !table_size || !data) {
+      return res.status(400).json({ error: 'started_at, table_size and data are required' });
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO live_sessions (user_id, client_id, name, started_at, ended_at, table_size, data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (client_id) DO UPDATE SET
+         name       = EXCLUDED.name,
+         ended_at   = EXCLUDED.ended_at,
+         table_size = EXCLUDED.table_size,
+         data       = EXCLUDED.data,
+         updated_at = NOW()
+       WHERE live_sessions.user_id = $1
+       RETURNING *`,
+      [req.session.userId, clientId, name ?? null, started_at, ended_at ?? null, table_size, data]
+    );
+    if (rows.length === 0) {
+      // Either inserted-but-conflicted-on-another-user, or update matched 0
+      // rows because client_id belongs to a different user.
+      return res.status(403).json({ error: 'Session belongs to another user' });
+    }
+    res.json({ session: rows[0] });
+  } catch (err) {
+    console.error('[live-sessions] upsert error:', err);
+    res.status(500).json({ error: 'Failed to save session' });
+  }
+});
+
+app.delete('/api/live-sessions/:clientId', requireDb, requireAuth, async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const result = await pool.query(
+      'DELETE FROM live_sessions WHERE client_id = $1 AND user_id = $2',
+      [clientId, req.session.userId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[live-sessions] delete error:', err);
+    res.status(500).json({ error: 'Failed to delete session' });
+  }
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 const COMMIT = process.env.RENDER_GIT_COMMIT?.slice(0, 7) ?? 'local';
