@@ -18,13 +18,16 @@ import { PokerDrillRouter } from './components/poker/PokerDrillRouter';
 import { PokerDashboard } from './components/poker/PokerDashboard';
 import { ProfilesHome } from './components/poker/profiles/ProfilesHome';
 import { HandLookup } from './components/poker/HandLookup';
+import { LiveSessionsHome } from './components/poker/live/LiveSessionsHome';
+import { LiveSessionActive } from './components/poker/live/LiveSessionActive';
 import { usePlayerProfiles } from './hooks/usePlayerProfiles';
+import { useLiveSessions } from './hooks/useLiveSessions';
 import { BlackjackHome } from './components/blackjack/BlackjackHome';
 import { BlackjackDrillRouter } from './components/blackjack/BlackjackDrillRouter';
 import { BlackjackDashboard } from './components/blackjack/BlackjackDashboard';
 
 const CHESS_VIEWS: AppView[] = ['chess_home', 'opening_detail', 'practice', 'challenge', 'dashboard'];
-const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup'];
+const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup', 'poker_live_home', 'poker_live_active'];
 const BLACKJACK_VIEWS: AppView[] = ['blackjack_home', 'blackjack_drill', 'blackjack_dashboard'];
 
 function getInitialTheme(): 'dark' | 'light' {
@@ -73,11 +76,13 @@ function AppInner() {
   const [practiceLineIndex, setPracticeLineIndex] = useState(0);
   const [pokerDrillType, setPokerDrillType] = useState<PokerDrillType | null>(null);
   const [bjDrillType, setBjDrillType] = useState<BlackjackDrillType | null>(null);
+  const [activeLiveSessionId, setActiveLiveSessionId] = useState<string | null>(null);
 
   const { progress, recordAttempt, resetProgress } = useProgress();
   const { progress: pokerProgress, recordAttempt: recordPokerAttempt, resetProgress: resetPokerProgress, getDrillStats } = usePokerProgress();
   const { progress: bjProgress, recordAttempt: recordBJAttempt, resetProgress: resetBJProgress, getDrillStats: getBJDrillStats } = useBlackjackProgress();
-  const { profiles, saveProfile, deleteProfile, duplicateTemplate } = usePlayerProfiles();
+  const { profiles, saveProfile, deleteProfile, duplicateTemplate, createBlankProfile } = usePlayerProfiles();
+  const { sessions: liveSessions, saveSession: saveLiveSession, deleteSession: deleteLiveSession } = useLiveSessions();
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -181,6 +186,12 @@ function AppInner() {
                 Hand Lookup
               </button>
               <button
+                className={`nav-link ${view === 'poker_live_home' || view === 'poker_live_active' ? 'active' : ''}`}
+                onClick={() => setView('poker_live_home')}
+              >
+                Live Session
+              </button>
+              <button
                 className={`nav-link ${view === 'poker_dashboard' ? 'active' : ''}`}
                 onClick={() => setView('poker_dashboard')}
               >
@@ -280,6 +291,7 @@ function AppInner() {
             onViewDashboard={() => setView('poker_dashboard')}
             onViewProfiles={() => setView('poker_profiles')}
             onViewHandLookup={() => setView('poker_hand_lookup')}
+            onViewLiveSession={() => setView('poker_live_home')}
             onBack={() => setView('home')}
           />
         )}
@@ -316,6 +328,50 @@ function AppInner() {
             onBack={() => setView('poker_home')}
           />
         )}
+
+        {view === 'poker_live_home' && (
+          <LiveSessionsHome
+            sessions={liveSessions}
+            profiles={profiles}
+            onCreateProfile={(name, tableSize) =>
+              createBlankProfile(name, 'villain', tableSize, 20, 20)
+            }
+            onSaveSession={saveLiveSession}
+            onDeleteSession={deleteLiveSession}
+            onResumeSession={(id) => {
+              setActiveLiveSessionId(id);
+              setView('poker_live_active');
+            }}
+            onStartSession={(s) => {
+              setActiveLiveSessionId(s.id);
+              setView('poker_live_active');
+            }}
+            onBack={() => setView('poker_home')}
+          />
+        )}
+
+        {view === 'poker_live_active' && activeLiveSessionId && (() => {
+          const session = liveSessions.find(s => s.id === activeLiveSessionId);
+          if (!session) {
+            // Session was deleted or not yet loaded — bounce back to home.
+            setView('poker_live_home');
+            return null;
+          }
+          return (
+            <LiveSessionActive
+              session={session}
+              profiles={profiles}
+              onSave={saveLiveSession}
+              onCreateProfile={(name, tableSize) =>
+                createBlankProfile(name, 'villain', tableSize, 20, 20)
+              }
+              onExit={() => {
+                setActiveLiveSessionId(null);
+                setView('poker_live_home');
+              }}
+            />
+          );
+        })()}
 
         {/* ── Blackjack views ── */}
         {view === 'blackjack_home' && (

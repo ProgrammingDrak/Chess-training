@@ -5426,3 +5426,651 @@ button {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+
+/* ============================================================
+   Live Session Tracker
+   In-person poker session UI: oval table, seat chips, stats.
+   Mobile-first: tap targets ≥ 56px, single-tap interactions.
+   ============================================================ */
+
+/* ── Sessions home (list view) ───────────────────────────── */
+.live-home {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.live-home-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.live-home-header > div { flex: 1; min-width: 240px; }
+
+.live-home-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.live-home-desc {
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  max-width: 600px;
+}
+
+.live-home-new-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.live-home-empty {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.live-home-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.live-home-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.live-home-card-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.live-home-card-main {
+  flex: 1;
+  min-width: 200px;
+  cursor: pointer;
+}
+
+.live-home-card-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.live-home-card-active-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  background: var(--accent);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.live-home-card-meta {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.live-home-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.live-home-card-resume,
+.live-home-card-delete {
+  padding: 8px 14px;
+  font-size: 0.85rem;
+}
+
+/* ── Setup screen ─────────────────────────────────────────── */
+.live-setup {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.live-setup-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.live-setup-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.live-setup-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.live-setup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.live-setup-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.live-setup-input {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  font-family: var(--font);
+}
+
+.live-setup-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.live-setup-tablesize {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.live-setup-tablesize-btn {
+  min-width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.live-setup-tablesize-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.live-setup-helper {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.live-setup-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* ── Active session ───────────────────────────────────────── */
+.live-active,
+.live-review {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.live-active-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.live-active-title-block {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+
+.live-active-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.live-active-ended-tag {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  background: var(--bg-3);
+  color: var(--text-muted);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.live-active-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.live-active-actions .btn-secondary {
+  flex: 1;
+  min-width: 110px;
+  padding: 12px 14px;
+}
+
+.live-active-actions .btn-secondary.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.live-active-end-btn {
+  border-color: var(--red) !important;
+  color: var(--red) !important;
+}
+
+.live-review-meta {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.live-review-resume {
+  align-self: flex-start;
+}
+
+/* ── Confirm dialog (inline) ──────────────────────────────── */
+.live-confirm {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.live-confirm-text {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.live-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.live-confirm-danger {
+  background: var(--red) !important;
+  border-color: var(--red) !important;
+}
+
+/* ── Poker table (presentational oval) ────────────────────── */
+.live-table {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  aspect-ratio: 1 / 1;
+}
+
+.live-table-felt {
+  position: absolute;
+  inset: 12%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, var(--board-dark) 0%, #4a6b3a 100%);
+  border: 6px solid var(--bg-4);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.live-table-center {
+  color: white;
+  text-align: center;
+  padding: 12px;
+  font-weight: 600;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.live-table-center-text {
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.live-table-center-sub {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 400;
+  opacity: 0.85;
+  margin-top: 2px;
+}
+
+/* ── Seat chip ────────────────────────────────────────────── */
+.live-seat-wrapper {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+.live-seat {
+  position: relative;
+  min-width: 76px;
+  min-height: 56px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--bg-2);
+  border: 2px solid var(--border);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.1s, border-color 0.1s, background 0.1s;
+}
+
+.live-seat:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.live-seat-empty {
+  background: var(--bg-1);
+  border-style: dashed;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.live-seat-empty-label {
+  font-size: 0.78rem;
+}
+
+.live-seat-filled {
+  border-color: var(--accent);
+}
+
+.live-seat-button {
+  border-color: var(--yellow);
+  box-shadow: 0 0 0 3px var(--yellow), 0 0 12px rgba(255, 215, 64, 0.3);
+}
+
+.live-seat-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.live-seat-button-marker {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--yellow);
+  color: #2a2200;
+  font-size: 0.75rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--bg-1);
+}
+
+.live-seat-position {
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  background: var(--accent);
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 2px solid var(--bg-1);
+}
+
+.live-seat-name {
+  display: block;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Stats panel ──────────────────────────────────────────── */
+.live-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.live-stats-headline {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.live-stats-stat {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+}
+
+.live-stats-stat-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--mono);
+}
+
+.live-stats-stat-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.live-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+@media (min-width: 640px) {
+  .live-stats-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.live-stats-section {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.live-stats-section-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.live-stats-empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.live-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.live-stats-table th,
+.live-stats-table td {
+  padding: 6px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+
+.live-stats-table th {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.live-stats-table th:first-child,
+.live-stats-table td:first-child {
+  text-align: left;
+}
+
+.live-stats-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* ── Player picker ────────────────────────────────────────── */
+.live-picker {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.live-picker-header { text-align: center; }
+
+.live-picker-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.live-picker-helper {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.live-picker-section-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.live-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.live-picker-profile {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 64px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.live-picker-profile:hover { border-color: var(--accent); }
+
+.live-picker-profile-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.live-picker-profile-type {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.live-picker-create {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.live-picker-input {
+  flex: 1;
+  min-width: 160px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  font-family: var(--font);
+}
+
+.live-picker-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.live-picker-create-btn {
+  flex-shrink: 0;
+}
+
+.live-picker-error {
+  color: var(--red);
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+
+.live-picker-cancel {
+  align-self: center;
+}

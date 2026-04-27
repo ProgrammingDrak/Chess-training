@@ -67,6 +67,7 @@ interface PokerHomeProps {
   onViewDashboard: () => void;
   onViewProfiles: () => void;
   onViewHandLookup: () => void;
+  onViewLiveSession: () => void;
   onBack: () => void;
 }
 
@@ -75,6 +76,7 @@ export function PokerHome({
   onSelectDrill,
   onViewProfiles,
   onViewHandLookup,
+  onViewLiveSession,
 }: PokerHomeProps) {
   return (
     <div className="poker-home">
@@ -153,6 +155,22 @@ export function PokerHome({
           <div className="drill-module-desc">
             Build hand-range profiles for yourself and opponents. 4-color action grid (fold/limp/call/raise),
             per-position ranges, post-flop thresholds. Use them to benchmark decisions against any playing style.
+          </div>
+        </div>
+        <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
+      </button>
+      <button
+        className="drill-module-card"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
+        onClick={onViewLiveSession}
+      >
+        <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>🎲</div>
+        <div style={{ flex: 1 }}>
+          <div className="drill-module-name">Live Session Tracker</div>
+          <div className="drill-module-desc">
+            Track real hands at a real table. Tap the winner of each hand; the button advances
+            automatically. Per-session stats: hands played, hands per hour, win % per player, win %
+            by position.
           </div>
         </div>
         <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
