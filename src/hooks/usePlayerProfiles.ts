@@ -27,7 +27,7 @@ function migratePositionConfig(raw: Record<string, unknown>): PositionRangeConfi
     situations: {
       [DEFAULT_ACTION_CONTEXT]: {
         range: (raw.range ?? {}) as Record<string, unknown> as Record<string, import('../types/profiles').RangeAction>,
-        callThresholdBB: (raw.callThresholdBB as number) ?? 20,
+        callThresholdBB: (raw.callThresholdBB as number) ?? 10,
       },
     },
   };

@@ -8,10 +8,10 @@ import type { RangeAction } from '../../../types/profiles';
 const ACTION_CYCLE: RangeAction[] = ['fold', 'limp', 'call', 'raise'];
 
 export const ACTION_CFG: Record<RangeAction, { label: string; emoji: string; bg: string; border: string; text: string }> = {
-  fold:  { label: 'Fold',  emoji: '🔴', bg: 'rgba(255,85,85,0.28)',   border: 'rgba(255,85,85,0.6)',    text: '#ff7070' },
-  limp:  { label: 'Limp',  emoji: '🟡', bg: 'rgba(255,215,64,0.28)',  border: 'rgba(255,215,64,0.6)',   text: '#ffd740' },
-  call:  { label: 'Call',  emoji: '🔵', bg: 'rgba(80,140,255,0.28)',  border: 'rgba(80,140,255,0.6)',   text: '#6699ff' },
-  raise: { label: 'Raise', emoji: '🟢', bg: 'rgba(48,232,122,0.28)',  border: 'rgba(48,232,122,0.6)',   text: '#30e87a' },
+  fold:  { label: 'Fold',           emoji: '🔴', bg: 'rgba(255,85,85,0.28)',   border: 'rgba(255,85,85,0.6)',    text: '#ff7070' },
+  limp:  { label: 'Limp',           emoji: '🟡', bg: 'rgba(255,215,64,0.28)',  border: 'rgba(255,215,64,0.6)',   text: '#ffd740' },
+  call:  { label: 'Call',           emoji: '🔵', bg: 'rgba(80,140,255,0.28)',  border: 'rgba(80,140,255,0.6)',   text: '#6699ff' },
+  raise: { label: 'Raise to all-in', emoji: '🟢', bg: 'rgba(48,232,122,0.28)',  border: 'rgba(48,232,122,0.6)',   text: '#30e87a' },
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -118,9 +118,9 @@ export function HandRangeEditor({
         </span>
       </div>
 
-      {/* Call threshold */}
+      {/* Call-or-raise threshold */}
       <div className="hre-threshold">
-        <span>🔵 Call up to</span>
+        <span>🔵 Call or raise (to all-in) up to</span>
         <input
           type="number"
           min={1} max={999}
@@ -128,7 +128,7 @@ export function HandRangeEditor({
           onChange={e => onChangeCallThreshold(Math.max(1, Number(e.target.value)))}
           className="hre-bb-input"
         />
-        <span>BB — above this, you need green (Raise) to continue</span>
+        <span>BB — short-stack zone. Above this, you need green to continue.</span>
       </div>
 
       {/* Brush selector */}
@@ -146,7 +146,6 @@ export function HandRangeEditor({
             >
               {cfg.emoji} {cfg.label}
               {action === 'call'  ? ` ≤${callThresholdBB}BB` : ''}
-              {action === 'raise' ? ' any'  : ''}
               {action === 'limp'  ? ' ★fun' : ''}
             </button>
           );

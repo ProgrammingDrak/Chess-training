@@ -24,7 +24,7 @@ const DEFAULT_POST_FLOP: PlayerProfile['postFlop'] = {
 
 /** Read the RFI situation from a position config, with safe fallback. */
 function getRfiSituation(pos: PositionRangeConfig) {
-  return pos.situations[DEFAULT_ACTION_CONTEXT] ?? { range: {}, callThresholdBB: 20 };
+  return pos.situations[DEFAULT_ACTION_CONTEXT] ?? { range: {}, callThresholdBB: 10 };
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
