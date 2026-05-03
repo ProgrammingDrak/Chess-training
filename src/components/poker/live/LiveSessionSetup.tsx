@@ -23,6 +23,33 @@ function blankSeats(tableSize: number): LiveSeat[] {
   }));
 }
 
+/**
+ * Resize the seats array, preserving seated players where possible.
+ *
+ * - Growing: all existing seats kept at their seat IDs, blanks appended.
+ * - Shrinking: players in seats < newSize stay in place; players in seats >= newSize
+ *   are relocated into the earliest empty seats within the new range.
+ *
+ * Caller must guarantee `occupiedCount <= newSize` when shrinking.
+ */
+function resizeKeepingPlayers(currentSeats: LiveSeat[], newSize: number): LiveSeat[] {
+  const next: LiveSeat[] = blankSeats(newSize);
+  // Survivors: seated players whose seat still exists.
+  for (const s of currentSeats) {
+    if (s.player !== null && s.seatId < newSize) {
+      next[s.seatId] = { seatId: s.seatId, player: s.player };
+    }
+  }
+  // Displaced: seated players whose seat vanished — slot into earliest empty seats.
+  for (const s of currentSeats) {
+    if (s.player !== null && s.seatId >= newSize) {
+      const empty = next.find(n => n.player === null);
+      if (empty) empty.player = s.player;
+    }
+  }
+  return next;
+}
+
 export function LiveSessionSetup({
   profiles,
   initialTableSize = 6,
@@ -36,12 +63,63 @@ export function LiveSessionSetup({
   const [buttonSeat, setButtonSeat] = useState<SeatId | null>(null);
   const [pickingSeat, setPickingSeat] = useState<SeatId | null>(null);
   const [pickButton, setPickButton] = useState(false);
+  // When shrinking would force players out, hold the target size here and prompt
+  // the user to drop seated players one at a time until the count fits.
+  const [pendingTableSize, setPendingTableSize] = useState<number | null>(null);
+
+  /**
+   * Reposition the button after a resize so it stays with the same player when
+   * possible, or clears if its player was dropped or its seat vanished without
+   * relocation.
+   */
+  const repositionButton = (
+    prevSeats: LiveSeat[],
+    nextSeats: LiveSeat[],
+    prevButton: SeatId | null,
+  ): SeatId | null => {
+    if (prevButton === null) return null;
+    const buttonPlayer = prevSeats.find(s => s.seatId === prevButton)?.player ?? null;
+    if (!buttonPlayer) return null;
+    const found = nextSeats.find(
+      s => s.player?.playerProfileId === buttonPlayer.playerProfileId,
+    );
+    return found ? found.seatId : null;
+  };
+
+  const applyResize = (newSize: number, baseSeats: LiveSeat[] = seats) => {
+    const nextSeats = resizeKeepingPlayers(baseSeats, newSize);
+    setSeats(nextSeats);
+    setTableSize(newSize);
+    setButtonSeat(prev => repositionButton(baseSeats, nextSeats, prev));
+  };
 
   const handleTableSizeChange = (next: number) => {
-    setTableSize(next);
-    setSeats(blankSeats(next));
-    setButtonSeat(null);
+    if (next === tableSize) return;
+    const occupied = seats.filter(s => s.player !== null).length;
+    if (occupied <= next) {
+      applyResize(next);
+      return;
+    }
+    // Need to drop (occupied - next) players first.
+    setPendingTableSize(next);
   };
+
+  const dropPlayerForResize = (seatId: SeatId) => {
+    if (pendingTableSize === null) return;
+    const nextSeats = seats.map(s =>
+      s.seatId === seatId ? { ...s, player: null } : s,
+    );
+    const occupied = nextSeats.filter(s => s.player !== null).length;
+    if (occupied <= pendingTableSize) {
+      applyResize(pendingTableSize, nextSeats);
+      setPendingTableSize(null);
+    } else {
+      setSeats(nextSeats);
+      if (buttonSeat === seatId) setButtonSeat(null);
+    }
+  };
+
+  const cancelPendingResize = () => setPendingTableSize(null);
 
   const occupiedSeats = seats.filter(s => s.player !== null).map(s => s.seatId);
   const playerNames = seats.map(s => {
@@ -99,6 +177,41 @@ export function LiveSessionSetup({
     };
     onStart(session);
   };
+
+  if (pendingTableSize !== null) {
+    const seated = seats.filter(s => s.player !== null);
+    const toDrop = seated.length - pendingTableSize;
+    return (
+      <div className="live-setup">
+        <div className="live-setup-header">
+          <button className="back-btn" onClick={cancelPendingResize}>← Cancel</button>
+          <h1 className="live-setup-title">
+            Drop {toDrop} player{toDrop === 1 ? '' : 's'}
+          </h1>
+        </div>
+        <p className="live-setup-helper">
+          You're shrinking the table to {pendingTableSize} seats. Tap{' '}
+          {toDrop === 1 ? 'a player' : `${toDrop} players`} to remove from the session.
+        </p>
+        <div className="live-setup-drop-list">
+          {seated.map(s => {
+            const profile = profiles.find(p => p.id === s.player!.playerProfileId);
+            return (
+              <button
+                key={s.seatId}
+                type="button"
+                className="live-setup-drop-btn"
+                onClick={() => dropPlayerForResize(s.seatId)}
+              >
+                <span className="live-setup-drop-seat">Seat {s.seatId + 1}</span>
+                <span className="live-setup-drop-name">{profile?.name ?? 'Unknown'}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   if (pickingSeat !== null) {
     return (
