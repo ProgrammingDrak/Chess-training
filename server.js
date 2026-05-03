@@ -9,6 +9,11 @@
  *
  * Safe without DATABASE_URL: falls back to in-memory sessions and returns
  * 503 on auth/profile endpoints so the frontend can degrade to localStorage.
+ *
+ * Lazy reconnect: if the database is unreachable at boot (e.g. Supabase
+ * paused), the server still starts.  `requireDb` re-probes Postgres on
+ * demand with a short cache so endpoints recover automatically once the
+ * database comes back — no manual restart needed.
  */
 
 import express from 'express';
@@ -22,7 +27,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 const isProd = process.env.NODE_ENV === 'production';
-let hasDb = Boolean(process.env.DATABASE_URL);
+const dbConfigured = Boolean(process.env.DATABASE_URL);
 
 const BCRYPT_ROUNDS = 12;
 
@@ -34,6 +39,51 @@ async function initSchema(pool) {
   console.log('[db] Schema initialized');
 }
 
+// ── DB health tracking ────────────────────────────────────────────────────────
+//
+// The session store and route handlers share a single connection pool.  We
+// track whether Postgres is reachable with a small in-memory cache:
+//
+//   - If healthy, reuse the result for HEALTHY_CACHE_MS to avoid hammering
+//     the DB on every request.
+//   - If unhealthy, retry every UNHEALTHY_RETRY_MS so endpoints come back
+//     online quickly when the DB does.
+//
+// Schema init runs lazily on the first successful probe.
+
+const HEALTHY_CACHE_MS  = 5000;
+const UNHEALTHY_RETRY_MS = 2000;
+
+let dbHealthy = false;
+let lastHealthCheckAt = 0;
+let schemaInitialized = false;
+
+async function checkDbHealth(pool) {
+  if (!dbConfigured || !pool) return false;
+  const now = Date.now();
+  const interval = dbHealthy ? HEALTHY_CACHE_MS : UNHEALTHY_RETRY_MS;
+  if (now - lastHealthCheckAt < interval) return dbHealthy;
+  lastHealthCheckAt = now;
+  try {
+    await pool.query('SELECT 1');
+    if (!dbHealthy) console.log('[db] Connection restored');
+    dbHealthy = true;
+    if (!schemaInitialized) {
+      try {
+        await initSchema(pool);
+        schemaInitialized = true;
+      } catch (err) {
+        console.error('[db] Schema init failed (will retry on next health check):', err.message);
+      }
+    }
+    return true;
+  } catch (err) {
+    if (dbHealthy) console.warn('[db] Connection lost:', err.message);
+    dbHealthy = false;
+    return false;
+  }
+}
+
 // Render (and most PaaS) terminate TLS at a proxy and forward as HTTP.
 // Without this, Express sees req.protocol as 'http' and silently drops
 // secure cookies. Required for express-session to issue Set-Cookie in prod.
@@ -43,29 +93,43 @@ if (isProd) app.set('trust proxy', 1);
 
 app.use(express.json());
 
-// Build session config — use PgSession when DATABASE_URL is present,
-// otherwise fall back to the default MemoryStore (not suitable for prod scale,
-// but safe for a deploy without Postgres provisioned yet).
+// Build session config — use PgSession when DATABASE_URL is present and
+// reachable at boot, otherwise fall back to the default MemoryStore.
+//
+// The pool itself is always created when DATABASE_URL is set, so route
+// handlers can recover when the DB comes back online without a server
+// restart.  Sessions stay in MemoryStore for this process lifetime if the
+// DB was down at boot — losing them on container restart is acceptable
+// since the alternative is a fully failed boot.
 let sessionStore = undefined; // undefined → Express MemoryStore
 let pool = null;
 
-if (hasDb) {
+if (dbConfigured) {
   try {
     const { default: pgPool } = await import('./db/pool.js');
-    // Probe connectivity before wiring PgSession — a dead pool here would
-    // cause every request to error on session store access.
-    await pgPool.query('SELECT 1');
-    const { default: connectPgSimple } = await import('connect-pg-simple');
-    const PgSession = connectPgSimple(session);
     pool = pgPool;
-    sessionStore = new PgSession({
-      pool,
-      tableName: 'sessions',
-      createTableIfMissing: true,
-    });
+    // Probe connectivity to decide whether to wire PgSession.  A dead pool
+    // wired into the session store would cause every request to error.
+    let bootHealthy = false;
+    try {
+      await pgPool.query('SELECT 1');
+      bootHealthy = true;
+    } catch (err) {
+      console.warn('[server] Database unreachable at boot — sessions in MemoryStore, requireDb will retry:', err.message);
+    }
+    if (bootHealthy) {
+      const { default: connectPgSimple } = await import('connect-pg-simple');
+      const PgSession = connectPgSimple(session);
+      sessionStore = new PgSession({
+        pool,
+        tableName: 'sessions',
+        createTableIfMissing: true,
+      });
+      dbHealthy = true;
+      lastHealthCheckAt = Date.now();
+    }
   } catch (err) {
-    console.error('[server] Database unreachable — falling back to MemoryStore:', err.message);
-    hasDb = false;
+    console.error('[server] Failed to load pg pool — DB features disabled:', err.message);
     pool = null;
   }
 } else {
@@ -89,9 +153,13 @@ app.use(
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
-function requireDb(req, res, next) {
-  if (!hasDb) {
+async function requireDb(req, res, next) {
+  if (!dbConfigured) {
     return res.status(503).json({ error: 'Database not configured — auth unavailable' });
+  }
+  const ok = await checkDbHealth(pool);
+  if (!ok) {
+    return res.status(503).json({ error: 'Database temporarily unavailable — try again in a moment' });
   }
   next();
 }
@@ -350,13 +418,9 @@ const COMMIT = process.env.RENDER_GIT_COMMIT?.slice(0, 7) ?? 'local';
 
 app.get('/api/health', async (_req, res) => {
   const base = { ok: true, commit: COMMIT, trustProxy: app.get('trust proxy') || false };
-  if (!hasDb) return res.json({ ...base, db: 'not configured' });
-  try {
-    await pool.query('SELECT 1');
-    res.json({ ...base, db: 'connected' });
-  } catch {
-    res.status(500).json({ ok: false, commit: COMMIT, db: 'error' });
-  }
+  if (!dbConfigured) return res.json({ ...base, db: 'not configured' });
+  const ok = await checkDbHealth(pool);
+  res.json({ ...base, db: ok ? 'connected' : 'unreachable' });
 });
 
 // ── Serve frontend in production ──────────────────────────────────────────────
@@ -372,19 +436,24 @@ if (isProd) {
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 async function start() {
-  if (hasDb) {
+  // Run schema init eagerly when the boot probe succeeded.  If the DB was
+  // unreachable at boot, schema init is deferred to checkDbHealth() and runs
+  // on the first successful re-probe.
+  if (dbConfigured && dbHealthy) {
     try {
       await initSchema(pool);
+      schemaInitialized = true;
     } catch (err) {
-      console.error('[db] Schema init failed — disabling DB features:', err.message);
-      hasDb = false;
+      console.error('[db] Schema init failed — will retry lazily:', err.message);
     }
   }
 
   app.listen(PORT, () => {
     console.log(`[server] Listening on :${PORT} (${isProd ? 'production' : 'development'})`);
-    if (!hasDb) {
+    if (!dbConfigured) {
       console.warn('[server] Running without database — auth/profiles unavailable, frontend uses localStorage');
+    } else if (!dbHealthy) {
+      console.warn('[server] Database unreachable at boot — endpoints will recover automatically once it comes back');
     }
   });
 }
