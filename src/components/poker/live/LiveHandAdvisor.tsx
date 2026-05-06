@@ -59,7 +59,10 @@ export function LiveHandAdvisor({
     ? profiles.find(profile => profile.id === activeProfileId) ?? null
     : null;
   const activePosition = activeSeatId !== null ? positions.get(activeSeatId) ?? null : null;
-  const selectedCards = cards.length === 2 ? [cards[0], cards[1]] as [Card, Card] : null;
+  const selectedCards = useMemo(
+    () => cards.length === 2 ? [cards[0], cards[1]] as [Card, Card] : null,
+    [cards],
+  );
   const handNotation = selectedCards ? cardsToHandNotation(selectedCards[0], selectedCards[1]) : null;
 
   const recommendation = useMemo(() => {
@@ -77,7 +80,7 @@ export function LiveHandAdvisor({
     : null;
 
   const snapshot = useMemo<LiveHandDecisionSnapshot | null>(() => {
-    if (!activeSeatId || !activeProfileId || !activePosition || !selectedCards || !recommendation) {
+    if (activeSeatId === null || !activeProfileId || !activePosition || !selectedCards || !recommendation) {
       return null;
     }
 
@@ -109,7 +112,7 @@ export function LiveHandAdvisor({
     onSnapshotChange(snapshot);
   }, [onSnapshotChange, snapshot]);
 
-  if (occupiedNow.length < 2 || !activeSeatId || !activeProfileId || !activePosition) {
+  if (occupiedNow.length < 2 || activeSeatId === null || !activeProfileId || !activePosition) {
     return null;
   }
 
