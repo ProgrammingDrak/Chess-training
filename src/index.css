@@ -3993,14 +3993,71 @@ button {
 .hre-apply-btn { padding: 5px 14px; font-size: 0.82rem; }
 .hre-qs-hint { color: var(--text-muted); font-size: 0.78rem; font-family: var(--mono); }
 
-/* Call threshold row */
-.hre-threshold {
+/* Threshold bucket controls */
+.hre-threshold,
+.hre-thresholds {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
   font-size: 0.83rem;
   color: var(--text-secondary);
-  padding: 2px 0;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.hre-threshold-copy {
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.hre-threshold-copy strong { color: var(--green); }
+.hre-bucket-grid,
+.hre-add-buckets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.hre-add-buckets {
+  padding-top: 2px;
+}
+.hre-bucket-row,
+.hre-add-bucket {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 8px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.hre-bucket-row { border-color: var(--hre-action-color, var(--border)); }
+.hre-bucket-swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.hre-bucket-label,
+.hre-bucket-unit,
+.hre-add-bucket span {
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.hre-bucket-remove {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.hre-bucket-remove:hover {
+  color: var(--red);
+  border-color: var(--red);
 }
 .hre-bb-input {
   width: 64px;
@@ -4013,6 +4070,7 @@ button {
   text-align: center;
   font-family: var(--mono);
 }
+.hre-add-btn { padding: 5px 10px; font-size: 0.78rem; }
 
 /* Brush selector row */
 .hre-brush-row {

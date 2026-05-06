@@ -3,6 +3,7 @@ import type { PlayerProfile } from '../../../types/profiles';
 import { DEFAULT_ACTION_CONTEXT } from '../../../types/profiles';
 import { PROFILE_TEMPLATES } from '../../../data/poker/profileTemplates';
 import { handCombos } from '../../../utils/handMatrix';
+import { useAuth } from '../../../contexts/AuthContext';
 import { ProfileEditor } from './ProfileEditor';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -27,6 +28,7 @@ export function ProfilesHome({
   // null = list view, 'new' = create blank, PlayerProfile = edit existing
   const [editing, setEditing] = useState<PlayerProfile | 'new' | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const { user } = useAuth();
 
   // ── Editor view ────────────────────────────────────────────────────────────
   if (editing !== null) {
@@ -85,7 +87,7 @@ export function ProfilesHome({
                 className="btn-secondary profiles-tpl-btn"
                 onClick={async () => {
                   try {
-                    const p = await onDuplicateTemplate(tpl.id, `My ${tpl.name}`, 6);
+                    const p = await onDuplicateTemplate(tpl.id, tpl.name, 6);
                     setEditing(p);
                   } catch (err) {
                     alert(`Failed to create profile: ${(err as Error).message}`);
@@ -100,7 +102,7 @@ export function ProfilesHome({
       </section>
 
       {/* ── Self profiles ── */}
-      {selfProfiles.length > 0 && (
+      {user && selfProfiles.length > 0 && (
         <section className="profiles-section">
           <h2 className="profiles-section-title">My Profiles (Self)</h2>
           <div className="profiles-cards-grid">
@@ -120,7 +122,7 @@ export function ProfilesHome({
       )}
 
       {/* ── Villain profiles ── */}
-      {villainProfiles.length > 0 && (
+      {user && villainProfiles.length > 0 && (
         <section className="profiles-section">
           <h2 className="profiles-section-title">Villain Profiles</h2>
           <div className="profiles-cards-grid">
@@ -140,7 +142,7 @@ export function ProfilesHome({
       )}
 
       {/* Empty state */}
-      {profiles.length === 0 && (
+      {user && profiles.length === 0 && (
         <div className="profiles-empty">
           <div className="profiles-empty-icon">📋</div>
           <p className="profiles-empty-text">

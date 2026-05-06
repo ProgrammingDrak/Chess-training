@@ -3,10 +3,11 @@ import { RANKS, cellHand } from '../../utils/handMatrix';
 import {
   HAND_RANK_MAP,
   buildRangeFromPercentile,
+  getGtoChartEntry,
   suggestedVpip,
   getPositionsForTableSize,
 } from '../../data/poker/profileTemplates';
-import { ACTION_CFG } from './profiles/HandRangeEditor';
+import { actionBucketFor, actionLabel, defaultActionBuckets, ensureActionBuckets } from '../../utils/profileActionBuckets';
 import type { PlayerProfile, RangeAction } from '../../types/profiles';
 import { DEFAULT_ACTION_CONTEXT } from '../../types/profiles';
 
@@ -52,10 +53,12 @@ function defaultShowGrid(): boolean {
 function HandPickerGrid({
   selectedHand,
   range,
+  buckets,
   onSelect,
 }: {
   selectedHand: string;
   range: Record<string, RangeAction>;
+  buckets: ReturnType<typeof defaultActionBuckets>;
   onSelect: (hand: string) => void;
 }) {
   return (
@@ -72,7 +75,7 @@ function HandPickerGrid({
           {RANKS.map((_, col) => {
             const hand = cellHand(row, col);
             const action = range[hand] ?? 'fold';
-            const cfg = ACTION_CFG[action];
+            const cfg = actionBucketFor(action, buckets);
             const isSelected = hand === selectedHand;
             const isPair   = row === col;
             const isSuited = col > row;
@@ -106,13 +109,14 @@ function HandPickerGrid({
 // ─── ResultPanel ──────────────────────────────────────────────────────────────
 
 function ResultPanel({
-  title, subtitle, action, note, mismatch,
+  title, subtitle, action, note, buckets, mismatch,
 }: {
   title: string; subtitle: string;
   action: RangeAction | null; note: string;
+  buckets: ReturnType<typeof defaultActionBuckets>;
   mismatch?: boolean;
 }) {
-  const cfg = action ? ACTION_CFG[action] : null;
+  const cfg = action ? actionBucketFor(action, buckets) : null;
   return (
     <div
       className={`hl-result-panel${mismatch ? ' hl-mismatch' : ''}`}
@@ -139,9 +143,10 @@ function ResultPanel({
 // ─── MiniGrid (display-only) ──────────────────────────────────────────────────
 
 function MiniGrid({
-  hand, range,
+  hand, range, buckets,
 }: {
   hand: string; range: Record<string, RangeAction>;
+  buckets: ReturnType<typeof defaultActionBuckets>;
 }) {
   return (
     <div className="hl-mini-grid">
@@ -150,7 +155,7 @@ function MiniGrid({
           {RANKS.map((__, col) => {
             const h = cellHand(row, col);
             const action = range[h] ?? 'fold';
-            const cfg = ACTION_CFG[action];
+            const cfg = actionBucketFor(action, buckets);
             const isSelected = h === hand;
             return (
               <div
@@ -226,9 +231,14 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
 
   // ── Derived ─────────────────────────────────────────────────────────────────
   const rank = HAND_RANK_MAP[selectedHand] ?? null;
-  const vpip = suggestedVpip(tableSize, safePosition);
+  const exactGtoChart = getGtoChartEntry(tableSize, safePosition);
+  const vpip = exactGtoChart?.publishedPct ?? suggestedVpip(tableSize, safePosition);
 
-  const gtoRange    = useMemo(() => buildRangeFromPercentile(vpip, 'raise'), [vpip]);
+  const gtoRange = useMemo(
+    () => exactGtoChart?.range ?? buildRangeFromPercentile(vpip, 'call'),
+    [exactGtoChart, vpip],
+  );
+  const gtoBuckets = useMemo(() => defaultActionBuckets(10, safePosition === 'SB' ? 2 : 1), [safePosition]);
   const gtoAction: RangeAction = gtoRange[selectedHand] ?? 'fold';
 
   const selectedProfile = profiles.find(p => p.id === selectedProfileId) ?? null;
@@ -246,6 +256,13 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
     const pos = selectedProfile.positions.find(p => p.position === safePosition);
     return pos?.situations[DEFAULT_ACTION_CONTEXT]?.range ?? gtoRange;
   }, [selectedProfile, safePosition, gtoRange]);
+
+  const activeBuckets = useMemo(() => {
+    if (!selectedProfile) return gtoBuckets;
+    const pos = selectedProfile.positions.find(p => p.position === safePosition);
+    const situation = pos?.situations[DEFAULT_ACTION_CONTEXT];
+    return situation ? ensureActionBuckets(situation) : gtoBuckets;
+  }, [gtoBuckets, selectedProfile, safePosition]);
 
   // Pot odds: fraction→equity for preset chips (bet / (pot + bet) where pot=1 unit)
   const POT_PRESETS: { key: string; label: string; fraction: number }[] = [
@@ -276,16 +293,37 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
 
   const profileMismatch = profileAction !== null && gtoAction !== profileAction;
 
-  const gtoNote = gtoAction === 'raise'
-    ? `In the top ${vpip}% GTO opening range for ${safePosition}.`
-    : `Outside the ${vpip}% GTO opening range for ${safePosition}.`;
+  const gtoSubtitle = exactGtoChart
+    ? tableSize === 2 && exactGtoChart.position === 'BTN'
+      ? `${safePosition} / SB · heads-up open · ${tableSize}-max · ${exactGtoChart.publishedPct}% baseline`
+      : exactGtoChart.position === 'BB'
+      ? `${safePosition} · defend blind · ${tableSize}-max · baseline chart`
+      : exactGtoChart.publishedPct === null
+      ? `${safePosition} · no RFI open · ${tableSize}-max`
+      : `${safePosition} · RFI · ${tableSize}-max · ${exactGtoChart.publishedPct}% researched chart`
+    : `${safePosition} · RFI · ${tableSize}-max · top ${vpip}% range`;
+
+  const gtoNote = exactGtoChart
+    ? tableSize === 2 && exactGtoChart.position === 'BTN'
+      ? gtoAction !== 'fold'
+        ? `${selectedHand} is a ${actionLabel(gtoAction, gtoBuckets)} hand in the heads-up BTN/SB baseline. ${exactGtoChart.note}`
+        : `${selectedHand} is outside the heads-up BTN/SB baseline. ${exactGtoChart.note}`
+      : exactGtoChart.position === 'BB'
+      ? gtoAction !== 'fold'
+        ? `${selectedHand} is a ${actionLabel(gtoAction, gtoBuckets)} hand in the BB defense baseline. ${exactGtoChart.note}`
+        : `${selectedHand} is outside the BB defense baseline. ${exactGtoChart.note}`
+      : gtoAction !== 'fold'
+        ? `${selectedHand} is a ${actionLabel(gtoAction, gtoBuckets)} hand in the researched ${safePosition} RFI chart.`
+        : `${selectedHand} is outside the researched ${safePosition} RFI chart. ${exactGtoChart.note}`
+    : gtoAction === 'raise'
+      ? `In the top ${vpip}% GTO opening range for ${safePosition}.`
+      : `Outside the ${vpip}% GTO opening range for ${safePosition}.`;
 
   const profileNote = profileAction === null
     ? `Profile has no data for ${safePosition}.`
-    : profileAction === 'raise' ? 'In your raise range.'
-    : profileAction === 'call'  ? 'In your call range.'
-    : profileAction === 'limp'  ? 'In your limp range (★ fun / not GTO).'
-    : 'Not in your range — fold.';
+    : profileAction === 'fold'
+      ? 'Not in your range: fold.'
+      : `In your ${actionLabel(profileAction, activeBuckets)} range.`;
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
@@ -364,6 +402,7 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
                 <HandPickerGrid
                   selectedHand={selectedHand}
                   range={activeRange}
+                  buckets={activeBuckets}
                   onSelect={selectFromGrid}
                 />
                 <div className="hl-grid-picker-hint">
@@ -394,9 +433,21 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
               <div className="hl-sit-field">
                 <label className="hl-label">Action before</label>
                 <select className="hl-select" disabled>
-                  <option>All folded (RFI)</option>
+                  <option>
+                    {tableSize === 2 && safePosition === 'BTN'
+                      ? 'Heads-up open (BTN/SB)'
+                      : safePosition === 'BB'
+                        ? 'Facing open (defend)'
+                        : 'All folded (RFI)'}
+                  </option>
                 </select>
-                <span className="hl-coming-soon">More contexts soon</span>
+                <span className="hl-coming-soon">
+                  {tableSize === 2
+                    ? 'Heads-up ranges are sizing-sensitive'
+                    : safePosition === 'BB'
+                      ? 'Defense varies by opener/size'
+                      : 'More contexts soon'}
+                </span>
               </div>
             </div>
           </div>
@@ -493,9 +544,10 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
         <div className="hl-results">
           <ResultPanel
             title="GTO Recommendation"
-            subtitle={`${safePosition} · RFI · ${tableSize}-max · top ${vpip}% range`}
+            subtitle={gtoSubtitle}
             action={gtoAction}
             note={gtoNote}
+            buckets={gtoBuckets}
           />
 
           {selectedProfile && (
@@ -504,6 +556,7 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
               subtitle={`${safePosition} · RFI · ${selectedProfile.tableSize}-max profile`}
               action={profileAction}
               note={profileNote}
+              buckets={activeBuckets}
               mismatch={profileMismatch}
             />
           )}
@@ -515,12 +568,11 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
                 : `GTO range — ${safePosition} in ${tableSize}-max`}
               <span className="hl-grid-legend"> · {selectedHand} highlighted</span>
             </div>
-            <MiniGrid hand={selectedHand} range={activeRange} />
+            <MiniGrid hand={selectedHand} range={activeRange} buckets={activeBuckets} />
             <div className="hl-grid-legend-row">
-              {(['fold', 'call', 'raise', 'limp'] as RangeAction[]).map(a => {
-                const cfg = ACTION_CFG[a];
+              {activeBuckets.map(cfg => {
                 return (
-                  <span key={a} className="hl-legend-chip" style={{ color: cfg.text, borderColor: cfg.border }}>
+                  <span key={cfg.id} className="hl-legend-chip" style={{ color: cfg.text, borderColor: cfg.border }}>
                     {cfg.emoji} {cfg.label}
                   </span>
                 );

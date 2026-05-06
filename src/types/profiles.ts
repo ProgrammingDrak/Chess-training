@@ -4,13 +4,30 @@
 export type ProfileType = 'self' | 'villain';
 
 /**
- * The four preflop action categories, shown as colour overlays on the grid:
- *   fold      → 🔴 red    — fold immediately
- *   limp      → 🟡 yellow — willing to call the BB (not GTO, "fun" category)
- *   call      → 🔵 blue   — raise/call up to a user-set BB threshold
- *   raise     → 🟢 green  — raise/call any amount
+ * Legacy actions plus user-created threshold buckets.
+ *   fold  → fold immediately
+ *   limp  → see a flop cheaply, up to a configured BB cap
+ *   call  → call/raise and build the pot up to a configured BB cap
+ *   raise → premium hands willing to get all money in
+ *
+ * Custom ids are stored in SituationRange.actionBuckets.
  */
-export type RangeAction = 'fold' | 'limp' | 'call' | 'raise';
+export type BaseRangeAction = 'fold' | 'limp' | 'call' | 'raise';
+export type RangeAction = BaseRangeAction | (string & {});
+
+export type RangeBucketKind = 'fold' | 'limp' | 'callRaise' | 'premium';
+
+export interface RangeActionBucket {
+  id: RangeAction;
+  kind: RangeBucketKind;
+  label: string;
+  emoji: string;
+  bg: string;
+  border: string;
+  text: string;
+  /** BB ceiling for threshold buckets. Premium and fold buckets do not use this. */
+  maxBB?: number;
+}
 
 /**
  * What happened before it is your turn to act.
@@ -46,8 +63,12 @@ export const DEFAULT_ACTION_CONTEXT: ActionContext = 'RFI';
 export interface SituationRange {
   /** Maps every hand notation (e.g. "AKs", "72o", "JJ") to an action. */
   range: Record<string, RangeAction>;
-  /** BB ceiling for the 🔵 'call' action — raise/call up to this many BBs only. */
+  /** Legacy BB ceiling for the 'call' action. New profiles also store actionBuckets. */
   callThresholdBB: number;
+  /** Legacy BB ceiling for the 'limp' action. New profiles also store actionBuckets. */
+  limpThresholdBB?: number;
+  /** Color/meaning metadata for built-in and user-added threshold actions. */
+  actionBuckets?: RangeActionBucket[];
 }
 
 /**
@@ -107,5 +128,7 @@ export interface ProfileTemplate {
   defaultCallThresholdBB: number;
   /** Base SituationRange applied to all positions under 'RFI' when duplicated. */
   baseRange: SituationRange;
+  /** Optional exact position ranges, keyed by table size, for researched chart templates. */
+  positionRanges?: Partial<Record<number, PositionRangeConfig[]>>;
   postFlop: PlayerProfile['postFlop'];
 }

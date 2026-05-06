@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { PlayerProfile, RangeAction, PositionRangeConfig } from '../../../types/profiles';
+import type { PlayerProfile, RangeAction, PositionRangeConfig, RangeActionBucket } from '../../../types/profiles';
 import { DEFAULT_ACTION_CONTEXT } from '../../../types/profiles';
 import {
   getPositionsForTableSize,
@@ -8,6 +8,7 @@ import {
   makeSituationRange,
   suggestedVpip,
 } from '../../../data/poker/profileTemplates';
+import { ensureActionBuckets } from '../../../utils/profileActionBuckets';
 import { HandRangeEditor } from './HandRangeEditor';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -24,7 +25,8 @@ const DEFAULT_POST_FLOP: PlayerProfile['postFlop'] = {
 
 /** Read the RFI situation from a position config, with safe fallback. */
 function getRfiSituation(pos: PositionRangeConfig) {
-  return pos.situations[DEFAULT_ACTION_CONTEXT] ?? { range: {}, callThresholdBB: 10 };
+  const situation = pos.situations[DEFAULT_ACTION_CONTEXT] ?? { range: {}, callThresholdBB: 10, limpThresholdBB: 1 };
+  return { ...situation, actionBuckets: ensureActionBuckets(situation) };
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -93,6 +95,30 @@ export function ProfileEditor({ initial, onSave, onCancel }: ProfileEditorProps)
     }));
   };
 
+  const handleActionBucketsChange = (actionBuckets: RangeActionBucket[]) => {
+    const callBucket = actionBuckets.find(bucket => bucket.id === 'call') ??
+      actionBuckets.find(bucket => bucket.kind === 'callRaise');
+    const limpBucket = actionBuckets.find(bucket => bucket.id === 'limp') ??
+      actionBuckets.find(bucket => bucket.kind === 'limp');
+
+    setPositions(prev => prev.map((p, i) => {
+      if (i !== selectedPosIdx) return p;
+      const prev_rfi = getRfiSituation(p);
+      return {
+        ...p,
+        situations: {
+          ...p.situations,
+          [DEFAULT_ACTION_CONTEXT]: {
+            ...prev_rfi,
+            actionBuckets,
+            callThresholdBB: callBucket?.maxBB ?? prev_rfi.callThresholdBB,
+            limpThresholdBB: limpBucket?.maxBB ?? prev_rfi.limpThresholdBB ?? 1,
+          },
+        },
+      };
+    }));
+  };
+
   const applyToAllPositions = () => {
     const src = getRfiSituation(positions[selectedPosIdx]);
     setPositions(prev => prev.map(p => ({
@@ -118,12 +144,14 @@ export function ProfileEditor({ initial, onSave, onCancel }: ProfileEditorProps)
     if (!name.trim()) return;
     const now = new Date().toISOString();
     const rfiSit = getRfiSituation(positions[0] ?? { position: '', situations: {} });
+    const defaultCallBucket = rfiSit.actionBuckets.find(bucket => bucket.id === 'call') ??
+      rfiSit.actionBuckets.find(bucket => bucket.kind === 'callRaise');
     const profile: PlayerProfile = {
       id: initial?.id ?? genId(),
       name: name.trim(),
       type,
       tableSize,
-      defaultCallThresholdBB: rfiSit.callThresholdBB,
+      defaultCallThresholdBB: defaultCallBucket?.maxBB ?? rfiSit.callThresholdBB,
       positions,
       postFlop,
       templateName: initial?.templateName,
@@ -227,7 +255,8 @@ export function ProfileEditor({ initial, onSave, onCancel }: ProfileEditorProps)
           <HandRangeEditor
             range={currentRfi.range}
             onChange={handleRangeChange}
-            callThresholdBB={currentRfi.callThresholdBB}
+            actionBuckets={currentRfi.actionBuckets}
+            onChangeActionBuckets={handleActionBucketsChange}
             onChangeCallThreshold={handleCallThresholdChange}
             suggestedPct={posSuggestion}
           />

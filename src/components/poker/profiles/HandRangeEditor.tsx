@@ -1,26 +1,26 @@
 import { useRef, useCallback, useState } from 'react';
 import { RANKS, cellHand, handCombos } from '../../../utils/handMatrix';
 import { HAND_RANK_MAP, buildRangeFromPercentile } from '../../../data/poker/profileTemplates';
-import type { RangeAction } from '../../../types/profiles';
+import type { RangeAction, RangeActionBucket, RangeBucketKind } from '../../../types/profiles';
+import {
+  actionBucketFor,
+  defaultActionBuckets,
+  makeThresholdBucket,
+  nextBucketColorIndex,
+} from '../../../utils/profileActionBuckets';
 
 // ─── Action config ────────────────────────────────────────────────────────────
 
-const ACTION_CYCLE: RangeAction[] = ['fold', 'limp', 'call', 'raise'];
-
-export const ACTION_CFG: Record<RangeAction, { label: string; emoji: string; bg: string; border: string; text: string }> = {
-  fold:  { label: 'Fold',           emoji: '🔴', bg: 'rgba(255,85,85,0.28)',   border: 'rgba(255,85,85,0.6)',    text: '#ff7070' },
-  limp:  { label: 'Limp',           emoji: '🟡', bg: 'rgba(255,215,64,0.28)',  border: 'rgba(255,215,64,0.6)',   text: '#ffd740' },
-  call:  { label: 'Call',           emoji: '🔵', bg: 'rgba(80,140,255,0.28)',  border: 'rgba(80,140,255,0.6)',   text: '#6699ff' },
-  raise: { label: 'Raise to all-in', emoji: '🟢', bg: 'rgba(48,232,122,0.28)',  border: 'rgba(48,232,122,0.6)',   text: '#30e87a' },
-};
+export const ACTION_CFG = Object.fromEntries(defaultActionBuckets(10, 1).map(bucket => [bucket.id, bucket]));
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface HandRangeEditorProps {
   range: Record<string, RangeAction>;
   onChange: (next: Record<string, RangeAction>) => void;
-  callThresholdBB: number;
-  onChangeCallThreshold: (bb: number) => void;
+  actionBuckets: RangeActionBucket[];
+  onChangeActionBuckets: (next: RangeActionBucket[]) => void;
+  onChangeCallThreshold?: (bb: number) => void;
   /** Position-aware VPIP suggestion — pre-seeds the quick-start slider. */
   suggestedPct?: number;
 }
@@ -30,13 +30,16 @@ interface HandRangeEditorProps {
 export function HandRangeEditor({
   range,
   onChange,
-  callThresholdBB,
+  actionBuckets,
+  onChangeActionBuckets,
   onChangeCallThreshold,
   suggestedPct,
 }: HandRangeEditorProps) {
   const [activeBrush, setActiveBrush] = useState<RangeAction>('raise');
   const [playPct, setPlayPct] = useState(suggestedPct ?? 20);
   const isDragging = useRef(false);
+  const buckets = actionBuckets.length > 0 ? actionBuckets : defaultActionBuckets(10, 1);
+  const actionCycle = buckets.map(bucket => bucket.id);
 
   const getAction = (hand: string): RangeAction => range[hand] ?? 'fold';
 
@@ -57,32 +60,73 @@ export function HandRangeEditor({
   const handleContextMenu = useCallback((hand: string, e: React.MouseEvent) => {
     e.preventDefault();
     const cur = getAction(hand);
-    const idx = ACTION_CYCLE.indexOf(cur);
-    const next = ACTION_CYCLE[(idx + 1) % ACTION_CYCLE.length];
+    const idx = actionCycle.indexOf(cur);
+    const next = actionCycle[(idx + 1) % actionCycle.length] ?? 'fold';
     onChange({ ...range, [hand]: next });
-  }, [range, onChange, getAction]);
+  }, [range, onChange, getAction, actionCycle]);
 
   const applyPercentile = () => {
-    onChange(buildRangeFromPercentile(playPct));
+    onChange(buildRangeFromPercentile(playPct, 'call'));
+  };
+
+  const updateBucket = (id: RangeAction, updates: Partial<RangeActionBucket>) => {
+    const next = buckets.map(bucket => {
+      if (bucket.id !== id) return bucket;
+      const nextBucket = { ...bucket, ...updates };
+      if (nextBucket.kind === 'callRaise' && nextBucket.maxBB !== undefined) {
+        nextBucket.label = `Call/Raise to ${nextBucket.maxBB}BB`;
+      }
+      if (nextBucket.kind === 'limp' && nextBucket.maxBB !== undefined) {
+        nextBucket.label = `Limp to ${nextBucket.maxBB}BB`;
+      }
+      return nextBucket;
+    });
+    onChangeActionBuckets(next);
+
+    if (id === 'call' && updates.maxBB !== undefined) {
+      onChangeCallThreshold?.(updates.maxBB);
+    }
+  };
+
+  const addThresholdBucket = (kind: Extract<RangeBucketKind, 'callRaise' | 'limp'>, maxBB: number) => {
+    const base = makeThresholdBucket(kind, maxBB, nextBucketColorIndex(buckets));
+    let nextBucket = base;
+    let suffix = 2;
+    while (buckets.some(bucket => bucket.id === nextBucket.id)) {
+      nextBucket = { ...base, id: `${base.id}_${suffix}` };
+      suffix += 1;
+    }
+    onChangeActionBuckets([...buckets, nextBucket]);
+    setActiveBrush(nextBucket.id);
+  };
+
+  const removeBucket = (id: RangeAction) => {
+    if (['fold', 'limp', 'call', 'raise'].includes(id)) return;
+    onChangeActionBuckets(buckets.filter(bucket => bucket.id !== id));
+    onChange(Object.fromEntries(Object.entries(range).map(([hand, action]) => [
+      hand,
+      action === id ? 'fold' : action,
+    ])));
+    if (activeBrush === id) setActiveBrush('fold');
   };
 
   // ── Stats ──────────────────────────────────────────────────────────────────
-  const stats: Record<RangeAction, { hands: number; combos: number }> = {
-    fold:  { hands: 0, combos: 0 },
-    limp:  { hands: 0, combos: 0 },
-    call:  { hands: 0, combos: 0 },
-    raise: { hands: 0, combos: 0 },
-  };
+  const stats: Record<string, { hands: number; combos: number }> = Object.fromEntries(
+    buckets.map(bucket => [bucket.id, { hands: 0, combos: 0 }])
+  );
   for (let row = 0; row < 13; row++) {
     for (let col = 0; col < 13; col++) {
       const hand = cellHand(row, col);
       const action = getAction(hand);
       const c = handCombos(hand);
-      stats[action].hands++;
-      stats[action].combos += c;
+      const key = stats[action] ? action : 'fold';
+      stats[key].hands++;
+      stats[key].combos += c;
     }
   }
-  const playedCombos = stats.limp.combos + stats.call.combos + stats.raise.combos;
+  const playedCombos = buckets
+    .filter(bucket => bucket.kind !== 'fold')
+    .reduce((sum, bucket) => sum + (stats[bucket.id]?.combos ?? 0), 0);
   const vpipPct = ((playedCombos / 1326) * 100).toFixed(1);
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -118,35 +162,62 @@ export function HandRangeEditor({
         </span>
       </div>
 
-      {/* Call-or-raise threshold */}
-      <div className="hre-threshold">
-        <span>🔵 Call or raise (to all-in) up to</span>
-        <input
-          type="number"
-          min={1} max={999}
-          value={callThresholdBB}
-          onChange={e => onChangeCallThreshold(Math.max(1, Number(e.target.value)))}
-          className="hre-bb-input"
-        />
-        <span>BB — short-stack zone. Above this, you need green to continue.</span>
+      {/* Threshold bucket controls */}
+      <div className="hre-thresholds">
+        <div className="hre-threshold-copy">
+          <strong>Green</strong> is premium/all-in. Blue buckets build the pot up to a cap.
+          Yellow buckets try to see a flop cheaply up to a cap.
+        </div>
+
+        <div className="hre-bucket-grid">
+          {buckets
+            .filter(bucket => bucket.kind === 'callRaise' || bucket.kind === 'limp')
+            .map(bucket => (
+              <div key={bucket.id} className="hre-bucket-row" style={{ '--hre-action-color': bucket.text } as React.CSSProperties}>
+                <span className="hre-bucket-swatch" style={{ background: bucket.bg, borderColor: bucket.border }} />
+                <span className="hre-bucket-label">{bucket.kind === 'callRaise' ? 'Call/Raise to' : 'Limp to'}</span>
+                <input
+                  type="number"
+                  min={0.5}
+                  max={999}
+                  step={0.5}
+                  value={bucket.maxBB ?? 1}
+                  onChange={e => updateBucket(bucket.id, { maxBB: Math.max(0.5, Number(e.target.value) || 0.5) })}
+                  className="hre-bb-input"
+                />
+                <span className="hre-bucket-unit">BB</span>
+                {!['limp', 'call'].includes(bucket.id) && (
+                  <button className="hre-bucket-remove" onClick={() => removeBucket(bucket.id)} title="Remove bucket">
+                    x
+                  </button>
+                )}
+              </div>
+            ))}
+        </div>
+
+        <div className="hre-add-buckets">
+          <button className="btn-secondary hre-add-btn" onClick={() => addThresholdBucket('callRaise', 20)}>
+            Add Call
+          </button>
+          <button className="btn-secondary hre-add-btn" onClick={() => addThresholdBucket('limp', 2)}>
+            Add Limp
+          </button>
+        </div>
       </div>
 
       {/* Brush selector */}
       <div className="hre-brush-row">
         <span className="hre-brush-label">Paint brush:</span>
-        {ACTION_CYCLE.map(action => {
-          const cfg = ACTION_CFG[action];
-          const isActive = activeBrush === action;
+        {buckets.map(bucket => {
+          const isActive = activeBrush === bucket.id;
           return (
             <button
-              key={action}
+              key={bucket.id}
               className={`hre-brush-btn${isActive ? ' active' : ''}`}
-              style={{ '--hre-action-color': cfg.text } as React.CSSProperties}
-              onClick={() => setActiveBrush(action)}
+              style={{ '--hre-action-color': bucket.text } as React.CSSProperties}
+              onClick={() => setActiveBrush(bucket.id)}
             >
-              {cfg.emoji} {cfg.label}
-              {action === 'call'  ? ` ≤${callThresholdBB}BB` : ''}
-              {action === 'limp'  ? ' ★fun' : ''}
+              {bucket.emoji} {bucket.label}
             </button>
           );
         })}
@@ -178,7 +249,7 @@ export function HandRangeEditor({
             {RANKS.map((_, col) => {
               const hand = cellHand(row, col);
               const action = getAction(hand);
-              const cfg = ACTION_CFG[action];
+              const cfg = actionBucketFor(action, buckets);
               const rank = HAND_RANK_MAP[hand] ?? 169;
               const isPair   = row === col;
               const isSuited = col > row;
@@ -212,13 +283,12 @@ export function HandRangeEditor({
 
       {/* Stats footer */}
       <div className="hre-stats-row">
-        {ACTION_CYCLE.map(action => {
-          const cfg = ACTION_CFG[action];
-          const s = stats[action];
+        {buckets.map(bucket => {
+          const s = stats[bucket.id] ?? { hands: 0, combos: 0 };
           return (
-            <div key={action} className="hre-stat-chip" style={{ color: cfg.text, borderColor: cfg.border }}>
-              <span className="hre-stat-emoji">{cfg.emoji}</span>
-              <span className="hre-stat-name">{cfg.label}</span>
+            <div key={bucket.id} className="hre-stat-chip" style={{ color: bucket.text, borderColor: bucket.border }}>
+              <span className="hre-stat-emoji">{bucket.emoji}</span>
+              <span className="hre-stat-name">{bucket.label}</span>
               <span className="hre-stat-nums">{s.hands}h · {s.combos}c</span>
             </div>
           );

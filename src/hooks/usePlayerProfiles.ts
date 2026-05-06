@@ -7,6 +7,7 @@ import {
   makeSituationRange,
   PROFILE_TEMPLATES,
 } from '../data/poker/profileTemplates';
+import { ensureActionBuckets } from '../utils/profileActionBuckets';
 import { useAuth } from '../contexts/AuthContext';
 
 const STORAGE_KEY = 'gto-player-profiles';
@@ -21,13 +22,31 @@ const DEFAULT_POSTFLOP: PlayerProfile['postFlop'] = {
 // ─── localStorage migration (v1 flat range → v2 situations) ──────────────────
 
 function migratePositionConfig(raw: Record<string, unknown>): PositionRangeConfig {
-  if (raw.situations) return raw as unknown as PositionRangeConfig;
+  if (raw.situations) {
+    const pos = raw as unknown as PositionRangeConfig;
+    return {
+      ...pos,
+      situations: Object.fromEntries(
+        Object.entries(pos.situations).map(([context, situation]) => {
+          if (!situation) return [context, situation];
+          return [context, { ...situation, actionBuckets: ensureActionBuckets(situation) }];
+        }),
+      ),
+    };
+  }
+
+  const legacySituation = {
+    range: (raw.range ?? {}) as Record<string, unknown> as Record<string, import('../types/profiles').RangeAction>,
+    callThresholdBB: (raw.callThresholdBB as number) ?? 10,
+    limpThresholdBB: (raw.limpThresholdBB as number) ?? 1,
+  };
+
   return {
     position: raw.position as string,
     situations: {
       [DEFAULT_ACTION_CONTEXT]: {
-        range: (raw.range ?? {}) as Record<string, unknown> as Record<string, import('../types/profiles').RangeAction>,
-        callThresholdBB: (raw.callThresholdBB as number) ?? 10,
+        ...legacySituation,
+        actionBuckets: ensureActionBuckets(legacySituation),
       },
     },
   };
@@ -86,8 +105,8 @@ function fromServerRow(row: ServerProfileRow): PlayerProfile {
     name: row.name,
     type: row.type === 'villain' ? 'villain' : 'self',
     tableSize: row.table_size ?? 6,
-    defaultCallThresholdBB: rd.defaultCallThresholdBB ?? 20,
-    positions: rd.positions ?? [],
+    defaultCallThresholdBB: rd.defaultCallThresholdBB ?? 10,
+    positions: (rd.positions ?? []).map(pos => migratePositionConfig(pos as unknown as Record<string, unknown>)),
     postFlop: row.postflop_thresholds ?? DEFAULT_POSTFLOP,
     templateName: rd.templateName,
     createdAt: row.created_at,
@@ -249,7 +268,9 @@ export function usePlayerProfiles() {
       type: tpl.type,
       tableSize,
       defaultCallThresholdBB: tpl.defaultCallThresholdBB,
-      positions: buildDefaultPositions(tableSize, tpl.baseRange),
+      positions: tpl.positionRanges?.[tableSize]
+        ? structuredClone(tpl.positionRanges[tableSize])
+        : buildDefaultPositions(tableSize, tpl.baseRange),
       postFlop: structuredClone(tpl.postFlop),
       templateName: tpl.name,
       createdAt: now,
