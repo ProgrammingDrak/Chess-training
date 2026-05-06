@@ -1,0 +1,9 @@
+.card-picker-ranks {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.card-picker-rank {
+  width: 100%;
+}
