@@ -12,6 +12,7 @@
 // data/poker/profileTemplates so live and GTO modules stay consistent.
 
 import type { Card } from './poker';
+import type { RangeAction } from './profiles';
 
 /** Index of a seat at the table.  0-based, length === LiveSession.tableSize. */
 export type SeatId = number;
@@ -57,6 +58,32 @@ export type LivePosition =
   | 'HJ'
   | 'CO';
 
+export interface LiveHandDecisionSnapshot {
+  /** Seat whose hole cards were checked against a profile/range. */
+  seatId: SeatId;
+  /** PlayerProfile.id of the checked player at the time of the hand. */
+  playerProfileId: string;
+  /** Stored position label for the checked player. */
+  position: LivePosition;
+  /** Exact hero/check-player hole cards. */
+  cards: [Card, Card];
+  /** Canonical 169-grid notation, e.g. AKs, AKo, JJ. */
+  handNotation: string;
+  /** Whether the recommendation came from the selected player profile or fallback GTO chart. */
+  source: 'profile' | 'gto';
+  /** Selected profile used for the recommendation, when available. */
+  profileId?: string;
+  profileName?: string;
+  /** The action shown to the user during live play. */
+  recommendedAction: RangeAction;
+  recommendedActionLabel: string;
+  /** GTO fallback/comparison action at the same table size and position. */
+  gtoAction: RangeAction;
+  gtoActionLabel: string;
+  /** Optional user-entered actual action for future audit/reporting. */
+  playedAction?: RangeAction;
+}
+
 /**
  * One completed hand in a session.
  *
@@ -93,6 +120,8 @@ export interface LiveHand {
   winnerPosition: LivePosition;
   /** Exact hole cards for the winning hand, or null when the winner did not show. */
   winningCards?: [Card, Card] | null;
+  /** Optional profile/range recommendation captured during the live hand. */
+  heroDecision?: LiveHandDecisionSnapshot;
 
   // ── Phase 2 (deferred): pot + bet sizes ──
   potBB?: number;
