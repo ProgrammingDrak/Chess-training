@@ -85,25 +85,24 @@ export interface LiveHandDecisionSnapshot {
 }
 
 /**
- * One completed hand in a session.
+ * One hand row in a session.
  *
- * `winnerPosition` is computed at hand-end and *stored* (not recomputed
- * from raw seat layout later).  This keeps stats deterministic when
- * players join/leave mid-session — the seated set at the time of the
- * hand might not be reconstructable from a static seat list.
+ * Normal completed hands have winner fields populated. Skipped hands are
+ * intentionally stored as blank rows with `skipped: true` so hand numbers and
+ * dealer-button advancement remain accurate when hands are missed.
  */
 export interface LiveHand {
   /** 0-based, monotonically increasing within a session. */
   index: number;
   /** ISO timestamp when the hand started (button assignment time). */
   startedAt: string;
-  /** ISO timestamp when the winner was tapped. */
+  /** ISO timestamp when the winner was tapped, the chop was saved, or the hand was skipped. */
   endedAt: string;
-  /** Seat holding the dealer button when the hand was dealt. */
+  /** Seat holding the dealer button when the hand was dealt/skipped. */
   buttonSeat: SeatId;
-  /** Table size when this hand was dealt. */
+  /** Table size when this hand was dealt/skipped. */
   tableSize?: number;
-  /** Snapshot: seats that were dealt cards in this hand (clockwise order). */
+  /** Snapshot: seats that were dealt cards or would have been dealt in this hand (clockwise order). */
   seatedPlayers: SeatId[];
   /**
    * Snapshot of player profile ids by seat for this hand.  This keeps
@@ -111,13 +110,24 @@ export interface LiveHand {
    * physical seats.
    */
   seatedPlayerProfileIds?: Record<string, string>;
-  /** Seat that won the pot. */
-  winnerSeat: SeatId;
-  /** PlayerProfile.id of the winner (preserved separately so seat reseats
-   *  don't lose attribution). */
-  winnerPlayerProfileId: string;
-  /** Position label assigned to the winner at hand-end. */
-  winnerPosition: LivePosition;
+  /** True when this is a blank placeholder for a hand missed/skipped in real life. */
+  skipped?: boolean;
+  /** Optional note for why the hand was skipped. */
+  skippedReason?: string;
+  /** True when the pot was chopped between multiple players. */
+  chopped?: boolean;
+  /** Seats that shared the chopped pot. */
+  chopSeats?: SeatId[];
+  /** PlayerProfile.ids that shared the chopped pot. */
+  chopPlayerProfileIds?: string[];
+  /** Position labels for the chopping players. */
+  chopPositions?: LivePosition[];
+  /** Seat that won the pot. Omitted for skipped/chopped hands. */
+  winnerSeat?: SeatId;
+  /** PlayerProfile.id of the winner. Omitted for skipped/chopped hands. */
+  winnerPlayerProfileId?: string;
+  /** Position label assigned to the winner at hand-end. Omitted for skipped/chopped hands. */
+  winnerPosition?: LivePosition;
   /** Exact hole cards for the winning hand, or null when the winner did not show. */
   winningCards?: [Card, Card] | null;
   /** Optional profile/range recommendation captured during the live hand. */
