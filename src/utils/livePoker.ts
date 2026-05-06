@@ -184,14 +184,14 @@ export function computeStats(session: LiveSession, nowMs?: number): SessionStats
   const elapsedMs = Math.max(0, endMs - startMs);
   const handsPerHour = elapsedMs > 0 ? (totalHands / elapsedMs) * 3_600_000 : 0;
 
-  // Per-player: count hands a player was dealt in, and hands they won.
-  // We derive "dealt in" from each hand's `seatedPlayers` snapshot rather
-  // than re-running interval logic — guarantees stats line up with what
-  // the user actually saw at the table.
+  // Per-player: skipped hands are placeholders only. Chopped pots split one
+  // win of credit evenly across all chopping players.
   const playerDealt = new Map<string, number>();
   const playerWon = new Map<string, number>();
 
   for (const hand of session.hands) {
+    if (hand.skipped) continue;
+
     const dealtPlayerIds = new Set<string>();
     for (const seatId of hand.seatedPlayers) {
       const pid = hand.seatedPlayerProfileIds?.[String(seatId)]
@@ -201,10 +201,18 @@ export function computeStats(session: LiveSession, nowMs?: number): SessionStats
     for (const pid of dealtPlayerIds) {
       playerDealt.set(pid, (playerDealt.get(pid) ?? 0) + 1);
     }
-    playerWon.set(
-      hand.winnerPlayerProfileId,
-      (playerWon.get(hand.winnerPlayerProfileId) ?? 0) + 1,
-    );
+
+    if (hand.chopped && hand.chopPlayerProfileIds && hand.chopPlayerProfileIds.length > 0) {
+      const credit = 1 / hand.chopPlayerProfileIds.length;
+      for (const pid of hand.chopPlayerProfileIds) {
+        playerWon.set(pid, (playerWon.get(pid) ?? 0) + credit);
+      }
+    } else if (hand.winnerPlayerProfileId) {
+      playerWon.set(
+        hand.winnerPlayerProfileId,
+        (playerWon.get(hand.winnerPlayerProfileId) ?? 0) + 1,
+      );
+    }
   }
 
   const byPlayer: PlayerStats[] = Array.from(playerDealt.entries()).map(
@@ -219,18 +227,27 @@ export function computeStats(session: LiveSession, nowMs?: number): SessionStats
     },
   );
 
-  // Per-position: count hands dealt at each position vs hands won there.
-  // Position assignments per-hand come from re-deriving from each hand's
-  // (buttonSeat, seatedPlayers) snapshot.
+  // Per-position: skipped hands are ignored for dealt/won rates. Chopped pots
+  // split one position win of credit across the chopping positions.
   const posDealt = new Map<LivePosition, number>();
   const posWon = new Map<LivePosition, number>();
 
   for (const hand of session.hands) {
+    if (hand.skipped) continue;
+
     const map = derivePositions(hand.buttonSeat, hand.seatedPlayers, hand.tableSize ?? session.tableSize);
     for (const pos of map.values()) {
       posDealt.set(pos, (posDealt.get(pos) ?? 0) + 1);
     }
-    posWon.set(hand.winnerPosition, (posWon.get(hand.winnerPosition) ?? 0) + 1);
+
+    if (hand.chopped && hand.chopPositions && hand.chopPositions.length > 0) {
+      const credit = 1 / hand.chopPositions.length;
+      for (const pos of hand.chopPositions) {
+        posWon.set(pos, (posWon.get(pos) ?? 0) + credit);
+      }
+    } else if (hand.winnerPosition) {
+      posWon.set(hand.winnerPosition, (posWon.get(hand.winnerPosition) ?? 0) + 1);
+    }
   }
 
   const byPosition: PositionStats[] = Array.from(posDealt.entries()).map(
