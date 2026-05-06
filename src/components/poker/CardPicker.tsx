@@ -9,6 +9,7 @@ import {
   parseExactCardInput,
 } from '../../utils/cardInput';
 import { PlayingCard } from './HandDisplay';
+import './CardPicker.css';
 
 type CardPickerMode = 'quick' | 'grid' | 'text';
 
