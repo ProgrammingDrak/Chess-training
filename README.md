@@ -1,10 +1,10 @@
-# GTO Trainer
+# GTO Training
 
 A training platform for mastering Game Theory Optimal play in chess, poker, and blackjack.
 
 ## Features
 
-### Chess Opening Trainer
+### Chess Opening Training
 - 10 openings with annotated variations (Queen's Gambit, Sicilian, Italian, Ruy Lopez, London, French, Caro-Kann, King's Gambit, King's Indian, English)
 - Interactive board with move-by-move feedback
 - Challenge mode: 5-streak across random lines
