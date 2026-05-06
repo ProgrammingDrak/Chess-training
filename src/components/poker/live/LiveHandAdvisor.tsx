@@ -11,6 +11,7 @@ import { cardsToHandNotation, getLiveHandRecommendation } from '../../../utils/p
 import { actionBucketFor } from '../../../utils/profileActionBuckets';
 import { handLabel } from '../../../utils/poker';
 import { CardPicker } from '../CardPicker';
+import './LiveHandAdvisor.css';
 
 interface LiveHandAdvisorProps {
   session: LiveSession;
