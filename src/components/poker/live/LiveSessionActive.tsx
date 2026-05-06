@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type {
   LiveSession,
   LiveHand,
+  LiveHandDecisionSnapshot,
   SeatId,
   LiveSeat,
   LivePosition,
@@ -15,6 +16,7 @@ import {
 } from '../../../utils/livePoker';
 import { PokerTable } from './PokerTable';
 import { LiveSessionStats } from './LiveSessionStats';
+import { LiveHandAdvisor } from './LiveHandAdvisor';
 import { SeatPlayerPicker } from './SeatPlayerPicker';
 import { CardPicker } from '../CardPicker';
 import { PlayingCard } from '../HandDisplay';
@@ -97,6 +99,7 @@ export function LiveSessionActive({
   const [boardCards, setBoardCards] = useState<BoardCards>(EMPTY_BOARD);
   const [boardSelection, setBoardSelection] = useState<BoardSelection | null>(null);
   const [boardSlotCards, setBoardSlotCards] = useState<Card[]>([]);
+  const [heroDecisionSnapshot, setHeroDecisionSnapshot] = useState<LiveHandDecisionSnapshot | null>(null);
 
   // Hand index of the *upcoming* hand (the one a winner-tap would close).
   const nextHandIndex = session.hands.length;
@@ -129,6 +132,10 @@ export function LiveSessionActive({
   }, [session.seats, profiles, occupiedNow]);
 
   const isEnded = session.endedAt !== null;
+
+  const handleAdvisorSnapshotChange = useCallback((snapshot: LiveHandDecisionSnapshot | null) => {
+    setHeroDecisionSnapshot(snapshot);
+  }, []);
 
   // ── Tap a seat: depending on mode, that's a winner / a remove / an add ──
 
@@ -200,12 +207,14 @@ export function LiveSessionActive({
       winnerPosition: pendingWinner.winnerPosition,
       ...(buildBoard(boardCards) ? { board: buildBoard(boardCards) } : {}),
       ...(winningCards !== undefined ? { winningCards } : {}),
+      ...(heroDecisionSnapshot ? { heroDecision: heroDecisionSnapshot } : {}),
       ...(shownHands.length > 0 ? { showdown: shownHands } : {}),
     };
     onSave({ ...session, nextButtonSeat: undefined, hands: [...session.hands, hand] });
     setBoardCards(EMPTY_BOARD);
     setBoardSelection(null);
     setBoardSlotCards([]);
+    setHeroDecisionSnapshot(null);
     cancelWinningCards();
   };
 
@@ -483,6 +492,19 @@ export function LiveSessionActive({
         onSeatDragEnd={() => setDraggedSeat(null)}
         onSeatDrop={handleSeatDrop}
       />
+
+      {!isEnded && (
+        <LiveHandAdvisor
+          session={session}
+          profiles={profiles}
+          occupiedNow={occupiedNow}
+          positions={positions}
+          playerNames={playerNames}
+          handIndex={nextHandIndex}
+          disabled={pendingWinner !== null}
+          onSnapshotChange={handleAdvisorSnapshotChange}
+        />
+      )}
 
       {!isEnded && (
         <div className="live-active-actions">
