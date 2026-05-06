@@ -151,6 +151,33 @@ export function LiveSessionStats({ session, profiles, liveTicker }: LiveSessionS
                         ))}
                       </div>
                     )}
+                    {hand.heroDecision && (
+                      <details className="live-hand-history-showdown live-hand-history-decision">
+                        <summary>
+                          Advice: {hand.heroDecision.handNotation} → {hand.heroDecision.recommendedActionLabel}
+                        </summary>
+                        <div className="live-hand-history-showdown-list">
+                          <div className="live-hand-history-showdown-row">
+                            <span>{handSeatName(hand, hand.heroDecision.seatId)} · {hand.heroDecision.position}</span>
+                            <strong>{handLabel(hand.heroDecision.cards[0], hand.heroDecision.cards[1])}</strong>
+                          </div>
+                          <div className="live-hand-history-showdown-row">
+                            <span>{hand.heroDecision.source === 'profile' ? hand.heroDecision.profileName ?? 'Profile' : 'GTO fallback'}</span>
+                            <strong>{hand.heroDecision.recommendedActionLabel}</strong>
+                          </div>
+                          <div className="live-hand-history-showdown-row">
+                            <span>GTO compare</span>
+                            <strong>{hand.heroDecision.gtoActionLabel}</strong>
+                          </div>
+                          {hand.heroDecision.playedAction && (
+                            <div className="live-hand-history-showdown-row">
+                              <span>Played</span>
+                              <strong>{hand.heroDecision.playedAction}</strong>
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    )}
                     {hand.showdown && hand.showdown.length > 0 && (
                       <details className="live-hand-history-showdown">
                         <summary>
