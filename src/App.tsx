@@ -127,7 +127,7 @@ function AppInner() {
           className="nav-logo"
           onClick={() => setView('home')}
         >
-          GTO Trainer
+          GTO Training
         </button>
         <div className="nav-links">
           {/* Root nav */}
