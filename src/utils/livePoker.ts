@@ -194,8 +194,8 @@ export function computeStats(session: LiveSession, nowMs?: number): SessionStats
   for (const hand of session.hands) {
     const dealtPlayerIds = new Set<string>();
     for (const seatId of hand.seatedPlayers) {
-      const seat = session.seats.find(s => s.seatId === seatId);
-      const pid = seat?.player?.playerProfileId;
+      const pid = hand.seatedPlayerProfileIds?.[String(seatId)]
+        ?? session.seats.find(s => s.seatId === seatId)?.player?.playerProfileId;
       if (pid) dealtPlayerIds.add(pid);
     }
     for (const pid of dealtPlayerIds) {
@@ -226,7 +226,7 @@ export function computeStats(session: LiveSession, nowMs?: number): SessionStats
   const posWon = new Map<LivePosition, number>();
 
   for (const hand of session.hands) {
-    const map = derivePositions(hand.buttonSeat, hand.seatedPlayers, session.tableSize);
+    const map = derivePositions(hand.buttonSeat, hand.seatedPlayers, hand.tableSize ?? session.tableSize);
     for (const pos of map.values()) {
       posDealt.set(pos, (posDealt.get(pos) ?? 0) + 1);
     }

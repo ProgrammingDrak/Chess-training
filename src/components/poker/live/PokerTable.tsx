@@ -13,6 +13,11 @@ interface PokerTableProps {
   /** Disable per-seat taps based on seatId. */
   isSeatDisabled?: (seatId: SeatId) => boolean;
   onSeatTap?: (seatId: SeatId) => void;
+  draggableSeats?: boolean;
+  draggedSeat?: SeatId | null;
+  onSeatDragStart?: (seatId: SeatId) => void;
+  onSeatDragEnd?: () => void;
+  onSeatDrop?: (fromSeatId: SeatId, toSeatId: SeatId) => void;
 }
 
 /**
@@ -31,6 +36,11 @@ export function PokerTable({
   centerContent,
   isSeatDisabled,
   onSeatTap,
+  draggableSeats,
+  draggedSeat,
+  onSeatDragStart,
+  onSeatDragEnd,
+  onSeatDrop,
 }: PokerTableProps) {
   return (
     <div className="live-table">
@@ -61,6 +71,12 @@ export function PokerTable({
               position={positions?.get(seatId) ?? null}
               disabled={isSeatDisabled?.(seatId)}
               onTap={onSeatTap}
+              draggable={Boolean(draggableSeats && playerNames[seatId])}
+              isDragging={draggedSeat === seatId}
+              isDropTarget={draggedSeat !== null && draggedSeat !== seatId}
+              onDragStart={onSeatDragStart}
+              onDragEnd={onSeatDragEnd}
+              onDrop={onSeatDrop}
             />
           </div>
         );

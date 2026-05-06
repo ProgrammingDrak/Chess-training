@@ -17,6 +17,18 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+async function readApiJson<T>(res: Response, fallbackMessage: string): Promise<T> {
+  const text = await res.text();
+  if (!text) {
+    throw new Error(res.ok ? fallbackMessage : `API unavailable (HTTP ${res.status})`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`API returned an invalid response (HTTP ${res.status})`);
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -27,7 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const timer = setTimeout(() => controller.abort(), 2000);
 
     fetch('/api/auth/me', { credentials: 'include', signal: controller.signal })
-      .then((r) => r.json())
+      .then((r) => readApiJson<{ user: AuthUser | null }>(r, 'Session unavailable'))
       .then((data) => setUser(data.user ?? null))
       .catch(() => setUser(null))
       .finally(() => { clearTimeout(timer); setLoading(false); });
@@ -42,8 +54,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       credentials: 'include',
       body: JSON.stringify({ username, password }),
     });
-    const data = await res.json();
+    const data = await readApiJson<{ user?: AuthUser; error?: string }>(res, 'Login failed');
     if (!res.ok) throw new Error(data.error ?? 'Login failed');
+    if (!data.user) throw new Error('Login failed');
     setUser(data.user);
   }, []);
 
@@ -54,8 +67,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       credentials: 'include',
       body: JSON.stringify({ username, password }),
     });
-    const data = await res.json();
+    const data = await readApiJson<{ user?: AuthUser; error?: string }>(res, 'Registration failed');
     if (!res.ok) throw new Error(data.error ?? 'Registration failed');
+    if (!data.user) throw new Error('Registration failed');
     setUser(data.user);
   }, []);
 

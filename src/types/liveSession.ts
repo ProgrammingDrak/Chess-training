@@ -74,8 +74,16 @@ export interface LiveHand {
   endedAt: string;
   /** Seat holding the dealer button when the hand was dealt. */
   buttonSeat: SeatId;
+  /** Table size when this hand was dealt. */
+  tableSize?: number;
   /** Snapshot: seats that were dealt cards in this hand (clockwise order). */
   seatedPlayers: SeatId[];
+  /**
+   * Snapshot of player profile ids by seat for this hand.  This keeps
+   * historical player stats stable if people are later moved to different
+   * physical seats.
+   */
+  seatedPlayerProfileIds?: Record<string, string>;
   /** Seat that won the pot. */
   winnerSeat: SeatId;
   /** PlayerProfile.id of the winner (preserved separately so seat reseats
@@ -83,13 +91,19 @@ export interface LiveHand {
   winnerPlayerProfileId: string;
   /** Position label assigned to the winner at hand-end. */
   winnerPosition: LivePosition;
+  /** Exact hole cards for the winning hand, or null when the winner did not show. */
+  winningCards?: [Card, Card] | null;
 
   // ── Phase 2 (deferred): pot + bet sizes ──
   potBB?: number;
   bets?: { seatId: SeatId; betBB: number }[];
 
   // ── Phase 3 (deferred): community cards ──
-  board?: { flop?: [Card, Card, Card]; turn?: Card; river?: Card };
+  board?: {
+    flop?: [Card | null, Card | null, Card | null];
+    turn?: Card | null;
+    river?: Card | null;
+  };
 
   // ── Phase 4 (deferred): showdown hole cards ──
   showdown?: { seatId: SeatId; cards: [Card, Card] }[];
@@ -115,6 +129,12 @@ export interface LiveSession {
   tableSize: number;
   /** Seat that held the button at hand 0. */
   initialButtonSeat: SeatId;
+  /**
+   * One-hand override used after the active table is resized/reseated.  The
+   * next recorded hand consumes this value, then normal button advancement
+   * resumes from that hand's stored buttonSeat.
+   */
+  nextButtonSeat?: SeatId;
   /** All seats; length === tableSize.  Indices are stable seat positions. */
   seats: LiveSeat[];
   /** Completed hands in chronological order. */

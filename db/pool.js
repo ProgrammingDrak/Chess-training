@@ -1,15 +1,21 @@
 import pg from 'pg';
 
 const { Pool } = pg;
+const connectionString = process.env.DATABASE_URL;
 
-if (!process.env.DATABASE_URL) {
+if (!connectionString) {
   console.warn('[pool] DATABASE_URL not set — database features will be unavailable');
 }
 
+const needsSsl =
+  process.env.NODE_ENV === 'production' ||
+  connectionString?.includes('supabase.com') ||
+  connectionString?.includes('sslmode=require');
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString,
   connectionTimeoutMillis: 5000,
-  ...(process.env.NODE_ENV === 'production' && {
+  ...(needsSsl && {
     ssl: { rejectUnauthorized: false },
   }),
 });

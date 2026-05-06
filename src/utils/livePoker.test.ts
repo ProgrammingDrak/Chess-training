@@ -302,6 +302,34 @@ describe('computeStats', () => {
     expect(byId('carol')?.winPct).toBe(0);
   });
 
+  it('uses hand player snapshots so later seat moves do not rewrite dealt-in stats', () => {
+    const session = makeSession({
+      seats: [
+        seat(0, 'bob'),
+        seat(1, 'alice'),
+        seat(2, 'carol'),
+        seat(3, null),
+        seat(4, null),
+        seat(5, null),
+      ],
+      hands: [
+        {
+          index: 0, startedAt: '', endedAt: '',
+          buttonSeat: 0,
+          seatedPlayers: [0, 1, 2],
+          seatedPlayerProfileIds: { '0': 'alice', '1': 'bob', '2': 'carol' },
+          winnerSeat: 0, winnerPlayerProfileId: 'alice', winnerPosition: 'BTN',
+        },
+      ],
+    });
+    const stats = computeStats(session, Date.parse('2026-04-26T19:00:00.000Z'));
+    const byId = (id: string) => stats.byPlayer.find(p => p.playerProfileId === id);
+    expect(byId('alice')?.handsDealtIn).toBe(1);
+    expect(byId('alice')?.handsWon).toBe(1);
+    expect(byId('bob')?.handsDealtIn).toBe(1);
+    expect(byId('bob')?.handsWon).toBe(0);
+  });
+
   it('computes per-position win percentage from seat snapshots', () => {
     const session = makeSession({
       hands: [
@@ -333,6 +361,45 @@ describe('computeStats', () => {
     expect(byPos('BTN')?.winPct).toBeCloseTo(33.33, 1);
     expect(byPos('SB')?.winPct).toBeCloseTo(33.33, 1);
     expect(byPos('BB')?.winPct).toBeCloseTo(33.33, 1);
+  });
+
+  it('uses each hand table-size snapshot after the live table is resized', () => {
+    const session = makeSession({
+      tableSize: 4,
+      seats: [
+        seat(0, 'alice'),
+        seat(1, 'bob'),
+        seat(2, 'carol'),
+        seat(3, 'dave'),
+      ],
+      hands: [
+        {
+          index: 0, startedAt: '', endedAt: '',
+          buttonSeat: 0,
+          tableSize: 5,
+          seatedPlayers: [0, 1, 2, 3, 4],
+          seatedPlayerProfileIds: {
+            '0': 'alice', '1': 'bob', '2': 'carol', '3': 'dave', '4': 'erin',
+          },
+          winnerSeat: 4, winnerPlayerProfileId: 'erin', winnerPosition: 'CO',
+        },
+        {
+          index: 1, startedAt: '', endedAt: '',
+          buttonSeat: 0,
+          tableSize: 4,
+          seatedPlayers: [0, 1, 2, 3],
+          seatedPlayerProfileIds: {
+            '0': 'alice', '1': 'bob', '2': 'carol', '3': 'dave',
+          },
+          winnerSeat: 3, winnerPlayerProfileId: 'dave', winnerPosition: 'CO',
+        },
+      ],
+    });
+    const stats = computeStats(session, Date.parse('2026-04-26T19:00:00.000Z'));
+    const byPos = (p: string) => stats.byPosition.find(x => x.position === p);
+
+    expect(byPos('HJ')?.handsAtPosition).toBe(1);
+    expect(byPos('CO')?.handsAtPosition).toBe(2);
   });
 
   it('handles mid-session player joins (only counts hands they were dealt in)', () => {

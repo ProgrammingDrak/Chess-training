@@ -28,12 +28,17 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const isProd = process.env.NODE_ENV === 'production';
 const dbConfigured = Boolean(process.env.DATABASE_URL);
+const skipSchemaInit = process.env.SKIP_SCHEMA_INIT === 'true';
 
 const BCRYPT_ROUNDS = 12;
 
 // ── Schema init ───────────────────────────────────────────────────────────────
 
 async function initSchema(pool) {
+  if (skipSchemaInit) {
+    console.log('[db] Schema init skipped');
+    return;
+  }
   const sql = readFileSync(path.join(__dirname, 'db', 'schema.sql'), 'utf8');
   await pool.query(sql);
   console.log('[db] Schema initialized');
