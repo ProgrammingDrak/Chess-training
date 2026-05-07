@@ -20,6 +20,17 @@ export type SeatId = number;
 /** One-card or two-card exposed hand information. */
 export type ExposedCards = [Card] | [Card, Card];
 
+export interface LiveSessionDetails {
+  /** Human-friendly venue or host name, e.g. "Chris's house" or "Harrah's Cherokee". */
+  venue?: string;
+  /** Street address or location detail for the game. */
+  address?: string;
+  /** Group tag for filtering later, e.g. "home-game", "casino", "tournament". */
+  groupTag?: string;
+  /** Freeform game/session notes. */
+  notes?: string;
+}
+
 export interface BlindLevel {
   /** Hand index at which this blind level becomes active, inclusive. */
   effectiveFromHandIndex: number;
@@ -202,6 +213,8 @@ export interface LiveSession {
   id: string;
   /** Optional human label, e.g. "Saturday $2/$5 at Bicycle". */
   name?: string;
+  /** Optional venue/address/group metadata for the game. */
+  details?: LiveSessionDetails;
   /** ISO timestamp — anchor for hands/hour. */
   startedAt: string;
   /** ISO timestamp set when session is ended; null while active. */
