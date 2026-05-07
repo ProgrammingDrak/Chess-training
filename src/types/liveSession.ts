@@ -20,6 +20,20 @@ export type SeatId = number;
 /** One-card or two-card exposed hand information. */
 export type ExposedCards = [Card] | [Card, Card];
 
+export type LiveStreet = 'preflop' | 'flop' | 'turn' | 'river';
+export type LiveSessionActiveTab = 'live' | 'statsAdvice' | 'venue';
+export type LiveCardPickerMode = 'grid' | 'quick' | 'text';
+
+export type LiveActionType =
+  | 'check'
+  | 'call'
+  | 'fold'
+  | 'bet'
+  | 'raise'
+  | 'all-in'
+  | 'post-blind'
+  | 'post-straddle';
+
 export interface LiveSessionDetails {
   /** Human-friendly venue or host name, e.g. "Chris's house" or "Harrah's Cherokee". */
   venue?: string;
@@ -60,6 +74,50 @@ export interface LiveBetSizing {
   inputMode: 'amount' | 'bb';
 }
 
+export interface LiveStraddle {
+  /** Seat/player who posted the straddle. */
+  seatId: SeatId;
+  /** Raw dollar/currency amount of the straddle at the time it was entered. */
+  amount: number;
+  /** Straddle converted into big blinds using the blind level active for this hand. */
+  amountBB: number;
+  /** Big blind used for historical conversion. */
+  bigBlindAtHand: number;
+  /** Original entry mode selected by the user. */
+  inputMode: 'amount' | 'bb';
+}
+
+export interface LiveHandAction {
+  street: LiveStreet;
+  seatId: SeatId;
+  playerProfileId?: string;
+  action: LiveActionType;
+  /** Raw dollar/currency amount added by this action. */
+  amount?: number;
+  /** Amount added by this action in big blinds. */
+  amountBB?: number;
+  potBeforeBB: number;
+  potAfterBB: number;
+  order: number;
+  createdAt?: string;
+}
+
+export interface LiveStackSnapshot {
+  seatId: SeatId;
+  playerProfileId: string;
+  startingStack: number;
+  startingStackBB: number;
+  endingStack: number;
+  endingStackBB: number;
+}
+
+export interface LivePlayerTag {
+  playerProfileId: string;
+  label: string;
+  note?: string;
+  createdAt: string;
+}
+
 export interface BankrollLog {
   buyIns: number[];
   cashOut: number;
@@ -67,6 +125,13 @@ export interface BankrollLog {
   /** cashOut - sum(buyIns) */
   net: number;
   recordedAt: string;
+}
+
+export interface LiveSessionPause {
+  /** ISO timestamp when the break/pause started. */
+  startedAt: string;
+  /** ISO timestamp when play resumed; null while currently paused. */
+  endedAt: string | null;
 }
 
 /**
@@ -134,6 +199,14 @@ export interface LiveHandDecisionSnapshot {
   gtoActionLabel: string;
   /** Optional user-entered actual action for future audit/reporting. */
   playedAction?: RangeAction;
+  /** Actual Hero action inferred from the hand action log. */
+  playedActionType?: LiveActionType;
+  /** Actual amount Hero put in for that action, in BB. */
+  playedActionAmountBB?: number;
+  /** Whether the inferred Hero action matched the recommendation bucket. */
+  followedAdvice?: boolean;
+  recommendedBucketKind?: 'fold' | 'limp' | 'callRaise' | 'premium';
+  recommendedBucketMaxBB?: number;
 }
 
 /**
@@ -184,9 +257,20 @@ export interface LiveHand {
   winningCards?: ExposedCards | null;
   /** Optional profile/range recommendation captured during the live hand. */
   heroDecision?: LiveHandDecisionSnapshot;
+  /** Full street-by-street action log for this hand. */
+  actions?: LiveHandAction[];
+  /** Stack snapshots for players dealt into this hand. */
+  stackSnapshots?: LiveStackSnapshot[];
+  /** Freeform hand note. */
+  notes?: string;
+  /** Tags applied while observing this hand. */
+  playerTags?: LivePlayerTag[];
 
   // ── Phase 2: pot + bet sizes ──
   potBB?: number;
+  finalPotAmount?: number;
+  finalPotBB?: number;
+  straddle?: LiveStraddle;
   bets?: { seatId: SeatId; betBB: number }[];
   betSizing?: LiveBetSizing;
 
@@ -233,6 +317,10 @@ export interface LiveSession {
   seats: LiveSeat[];
   /** Completed hands in chronological order. */
   hands: LiveHand[];
+  /** Initial stack baseline for each seated player at session start. */
+  initialStacks?: LiveStackSnapshot[];
+  /** Session-level player tags/notes. */
+  playerTags?: LivePlayerTag[];
 
   /** Blind levels over time. The last level with effectiveFromHandIndex <= hand index applies. */
   blindLevels?: BlindLevel[];
@@ -240,6 +328,13 @@ export interface LiveSession {
   stakes?: { sbBB?: number; bbBB?: number; currency?: string };
   /** Optional bankroll result recorded when ending the session. */
   bankroll?: BankrollLog;
+  /** Breaks that should be excluded from elapsed time, hands/hour, and $/hour. */
+  pauses?: LiveSessionPause[];
+  /** View-only preferences for the active live-session UI. */
+  uiPreferences?: {
+    activeTab?: LiveSessionActiveTab;
+    cardPickerMode?: LiveCardPickerMode;
+  };
 
   /** Last time the session was modified (ISO). */
   updatedAt: string;
@@ -265,12 +360,119 @@ export interface PositionStats {
   winPct: number;
 }
 
+export interface PlayerPositionStats {
+  playerProfileId: string;
+  position: LivePosition;
+  handsAtPosition: number;
+  handsWonAtPosition: number;
+  /** 0–100. */
+  winPct: number;
+}
+
+export interface ProfitStats {
+  net: number;
+  dollarsPerHour: number;
+  currency: string;
+}
+
+export interface ShowdownVisibilityStats {
+  /** Normal won pots where show/no-show is known. Chops and skipped hands excluded. */
+  knownWonHands: number;
+  shownWins: number;
+  noShowWins: number;
+  unknownWins: number;
+  shownPct: number;
+  noShowPct: number;
+}
+
+export interface PlayerShowdownStats {
+  playerProfileId: string;
+  wins: number;
+  shownWins: number;
+  noShowWins: number;
+  shownLosingHands: number;
+  shownPct: number;
+  noShowPct: number;
+}
+
+export interface CountPctStats {
+  label: string;
+  count: number;
+  /** 0–100. */
+  pct: number;
+}
+
+export interface ShowdownProfileStats {
+  byPlayer: PlayerShowdownStats[];
+  winningHandClasses: CountPctStats[];
+  boardTextures: CountPctStats[];
+}
+
+export interface BetSizingBucketStats {
+  key: string;
+  count: number;
+  avgBetBB: number;
+  avgPotBB: number;
+  avgFinalPotBB: number | null;
+  avgPotFraction: number | null;
+}
+
+export interface BetSizingStats {
+  sampleSize: number;
+  finalPotSampleSize: number;
+  avgBetBB: number;
+  avgPotBB: number;
+  avgFinalPotBB: number | null;
+  avgPotFraction: number | null;
+  byPlayer: BetSizingBucketStats[];
+  byPosition: BetSizingBucketStats[];
+}
+
+export interface AdvisorStats {
+  totalAdvice: number;
+  recordedActions: number;
+  followed: number;
+  different: number;
+  followPct: number;
+}
+
+export interface ActionStatsByPlayer {
+  playerProfileId: string;
+  hands: number;
+  vpip: number;
+  pfr: number;
+  threeBet: number;
+  fourBet: number;
+  straddle: number;
+  aggressionActions: number;
+  passiveActions: number;
+  vpipPct: number;
+  pfrPct: number;
+  threeBetPct: number;
+  fourBetPct: number;
+  straddlePct: number;
+  aggressionFactor: number | null;
+}
+
+export interface ActionStats {
+  byPlayer: ActionStatsByPlayer[];
+}
+
 export interface SessionStats {
   totalHands: number;
+  /** Count of hands explicitly recorded as chopped pots. */
+  choppedPots: number;
   /** Hands per hour, computed from session.startedAt to (endedAt ?? now). */
   handsPerHour: number;
   /** Elapsed milliseconds used as the denominator above. */
   elapsedMs: number;
+  profit: ProfitStats | null;
+  showdownVisibility: ShowdownVisibilityStats;
+  showdownProfiles: ShowdownProfileStats;
+  betSizing: BetSizingStats;
+  advisor: AdvisorStats;
+  actionStats: ActionStats;
   byPlayer: PlayerStats[];
   byPosition: PositionStats[];
+  byPlayerPosition: PlayerPositionStats[];
 }

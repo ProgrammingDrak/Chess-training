@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { LiveSession, LiveSeat, SeatId } from '../../../types/liveSession';
+import { useMemo, useState } from 'react';
+import type { LiveSession, LiveSeat, LiveStackSnapshot, SeatId } from '../../../types/liveSession';
 import type { PlayerProfile } from '../../../types/profiles';
 import { newSessionId } from '../../../hooks/useLiveSessions';
 import { PokerTable } from './PokerTable';
@@ -65,6 +65,8 @@ export function LiveSessionSetup({
   const [currency, setCurrency] = useState('$');
   const [smallBlindRaw, setSmallBlindRaw] = useState('1');
   const [bigBlindRaw, setBigBlindRaw] = useState('2');
+  const [defaultStackRaw, setDefaultStackRaw] = useState('100');
+  const [stackRawBySeat, setStackRawBySeat] = useState<Record<string, string>>({});
   const [tableSize, setTableSize] = useState(initialTableSize);
   const [seats, setSeats] = useState<LiveSeat[]>(() => blankSeats(initialTableSize));
   const [buttonSeat, setButtonSeat] = useState<SeatId | null>(null);
@@ -168,11 +170,30 @@ export function LiveSessionSetup({
 
   const smallBlind = Math.max(0, Number(smallBlindRaw) || 0);
   const bigBlind = Math.max(0, Number(bigBlindRaw) || 0);
+  const stackBBForSeat = (seatId: SeatId) => Math.max(0, Number(stackRawBySeat[String(seatId)] ?? defaultStackRaw) || 0);
+  const setupStackInfo = useMemo(() => {
+    const map = new Map<SeatId, LiveStackSnapshot>();
+    for (const seatId of occupiedSeats) {
+      const playerId = seats[seatId].player?.playerProfileId;
+      if (!playerId) continue;
+      const stackBB = stackBBForSeat(seatId);
+      map.set(seatId, {
+        seatId,
+        playerProfileId: playerId,
+        startingStack: stackBB * Math.max(0.01, bigBlind),
+        startingStackBB: stackBB,
+        endingStack: stackBB * Math.max(0.01, bigBlind),
+        endingStackBB: stackBB,
+      });
+    }
+    return map;
+  }, [bigBlind, defaultStackRaw, occupiedSeats, seats, stackRawBySeat]);
   const canStart = occupiedSeats.length >= 2 && buttonSeat !== null && bigBlind > 0;
 
   const handleStart = () => {
     if (!canStart || buttonSeat === null) return;
     const now = new Date().toISOString();
+    const initialStacks = Array.from(setupStackInfo.values());
     const session: LiveSession = {
       id: newSessionId(),
       name: name.trim() || undefined,
@@ -188,6 +209,7 @@ export function LiveSessionSetup({
       initialButtonSeat: buttonSeat,
       seats,
       hands: [],
+      initialStacks,
       blindLevels: [{
         effectiveFromHandIndex: 0,
         smallBlind,
@@ -312,8 +334,10 @@ export function LiveSessionSetup({
               className="live-setup-input live-setup-blind-input"
               type="text"
               value={currency}
+              placeholder="$"
+              title="Symbol shown before money amounts, like $ or €"
               onChange={e => setCurrency(e.target.value)}
-              aria-label="Currency"
+              aria-label="Money symbol"
             />
             <input
               className="live-setup-input live-setup-blind-input"
@@ -334,6 +358,28 @@ export function LiveSessionSetup({
               onChange={e => setBigBlindRaw(e.target.value)}
               aria-label="Big blind"
             />
+          </div>
+        </div>
+
+        <div className="live-setup-field">
+          <span className="live-setup-label">Default starting stack (BB)</span>
+          <div className="live-setup-blinds-row">
+            <input
+              className="live-setup-input live-setup-blind-input"
+              type="number"
+              min={0}
+              step={1}
+              value={defaultStackRaw}
+              onChange={e => setDefaultStackRaw(e.target.value)}
+              aria-label="Default starting stack in big blinds"
+            />
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setStackRawBySeat(Object.fromEntries(occupiedSeats.map(seatId => [String(seatId), defaultStackRaw])))}
+            >
+              Apply to all
+            </button>
           </div>
         </div>
 
@@ -370,10 +416,30 @@ export function LiveSessionSetup({
         least 2 players seated, choose the dealer button and start the session.
       </p>
 
+      {occupiedSeats.length > 0 && (
+        <div className="live-setup-stack-list">
+          {occupiedSeats.map(seatId => (
+            <label key={seatId} className="hl-sit-field">
+              <span className="hl-label">{playerNames[seatId] ?? `Seat ${seatId + 1}`} stack (BB)</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                className="hl-num-input"
+                value={stackRawBySeat[String(seatId)] ?? defaultStackRaw}
+                onChange={e => setStackRawBySeat(prev => ({ ...prev, [String(seatId)]: e.target.value }))}
+              />
+            </label>
+          ))}
+        </div>
+      )}
+
       <PokerTable
         tableSize={tableSize}
         playerNames={playerNames}
         buttonSeat={buttonSeat}
+        stackInfo={setupStackInfo}
+        bigBlind={bigBlind}
         centerContent={
           <div className="live-table-center-text">
             {occupiedSeats.length < 2

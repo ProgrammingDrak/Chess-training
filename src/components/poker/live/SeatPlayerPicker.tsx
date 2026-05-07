@@ -75,7 +75,7 @@ export function SeatPlayerPicker({
               >
                 <span className="live-picker-profile-name">{p.name}</span>
                 <span className="live-picker-profile-type">
-                  {p.type === 'self' ? 'Self' : 'Villain'}
+                  {p.type === 'self' ? 'Hero' : 'Villain'}
                 </span>
               </button>
             ))}

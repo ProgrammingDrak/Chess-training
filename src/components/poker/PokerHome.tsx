@@ -1,4 +1,6 @@
 import type { PokerProgress, PokerDrillType } from '../../types/poker';
+import { FEATURE_TIERS, POKER_DRILL_TIERS } from '../../data/featureTiers';
+import { getTierLabel } from '../../types/tiers';
 
 interface DrillModule {
   type: PokerDrillType;
@@ -94,6 +96,7 @@ export function PokerHome({
         {DRILL_MODULES.map((module) => {
           const stats = getDrillStats(module.type);
           const hasStarted = stats.totalAttempts > 0;
+          const requiredTier = POKER_DRILL_TIERS[module.type];
 
           return (
             <button
@@ -102,7 +105,14 @@ export function PokerHome({
               onClick={() => onSelectDrill(module.type)}
             >
               <div className="drill-module-icon">{module.icon}</div>
-              <div className="drill-module-name">{module.name}</div>
+              <div className="drill-module-name">
+                {module.name}
+                {requiredTier && (
+                  <span className={`tier-chip tier-${requiredTier}`}>
+                    {getTierLabel(requiredTier)}
+                  </span>
+                )}
+              </div>
               <div className="drill-module-desc">{module.description}</div>
               <div className="drill-module-meta">
                 <span className="drill-module-difficulty">{module.scenarioCount} scenarios</span>
@@ -136,7 +146,12 @@ export function PokerHome({
       >
         <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>🔎</div>
         <div style={{ flex: 1 }}>
-          <div className="drill-module-name">What Should I Do?</div>
+          <div className="drill-module-name">
+            What Should I Do?
+            <span className={`tier-chip tier-${FEATURE_TIERS.pokerHandLookup}`}>
+              {getTierLabel(FEATURE_TIERS.pokerHandLookup)}
+            </span>
+          </div>
           <div className="drill-module-desc">
             Pick your hole cards, position, and table size. Get the GTO recommendation for RFI and compare
             it to any saved profile — with the hand highlighted on the range grid.
@@ -151,9 +166,14 @@ export function PokerHome({
       >
         <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>📋</div>
         <div style={{ flex: 1 }}>
-          <div className="drill-module-name">Player Profiles</div>
+          <div className="drill-module-name">
+            Player Profiles
+            <span className={`tier-chip tier-${FEATURE_TIERS.pokerProfiles}`}>
+              {getTierLabel(FEATURE_TIERS.pokerProfiles)}
+            </span>
+          </div>
           <div className="drill-module-desc">
-            Build hand-range profiles for yourself and opponents. 4-color action grid (fold/limp/call/raise),
+            Build hand-range profiles for Hero and opponents. 4-color action grid (fold/limp/call/raise),
             per-position ranges, post-flop thresholds. Use them to benchmark decisions against any playing style.
           </div>
         </div>
@@ -166,7 +186,12 @@ export function PokerHome({
       >
         <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>🎲</div>
         <div style={{ flex: 1 }}>
-          <div className="drill-module-name">Live Session Tracker</div>
+          <div className="drill-module-name">
+            Live Session Tracker
+            <span className={`tier-chip tier-${FEATURE_TIERS.pokerLiveSession}`}>
+              {getTierLabel(FEATURE_TIERS.pokerLiveSession)}
+            </span>
+          </div>
           <div className="drill-module-desc">
             Track real hands at a real table. Tap the winner of each hand; the button advances
             automatically. Per-session stats: hands played, hands per hour, win % per player, win %

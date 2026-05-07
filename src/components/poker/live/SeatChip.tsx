@@ -1,11 +1,15 @@
-import type { LivePosition } from '../../../types/liveSession';
+import type { LivePosition, LiveStackSnapshot } from '../../../types/liveSession';
+import { formatLiveNumber } from '../../../utils/liveMoney';
 
 interface SeatChipProps {
   seatId: number;
   /** null when empty. */
   playerName: string | null;
   isButton: boolean;
+  isActionSeat?: boolean;
   position: LivePosition | null;
+  stack?: LiveStackSnapshot | null;
+  bigBlind?: number;
   isWinner?: boolean;
   disabled?: boolean;
   draggable?: boolean;
@@ -21,7 +25,10 @@ export function SeatChip({
   seatId,
   playerName,
   isButton,
+  isActionSeat,
   position,
+  stack,
+  bigBlind,
   isWinner,
   disabled,
   draggable,
@@ -37,6 +44,7 @@ export function SeatChip({
     'live-seat',
     empty ? 'live-seat-empty' : 'live-seat-filled',
     isButton ? 'live-seat-button' : '',
+    isActionSeat ? 'live-seat-action' : '',
     isWinner ? 'live-seat-winner' : '',
     disabled ? 'live-seat-disabled' : '',
     draggable ? 'live-seat-draggable' : '',
@@ -77,6 +85,11 @@ export function SeatChip({
       <span className="live-seat-name">
         {empty ? <span className="live-seat-empty-label">Seat {seatId + 1}</span> : playerName}
       </span>
+      {stack && (
+        <span className="live-seat-stack" title={`${formatLiveNumber(stack.startingStack)} / ${formatLiveNumber(stack.startingStackBB)}BB`}>
+          {formatLiveNumber(stack.startingStackBB)}BB
+        </span>
+      )}
     </button>
   );
 }

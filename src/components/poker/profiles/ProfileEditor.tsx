@@ -197,7 +197,7 @@ export function ProfileEditor({ initial, onSave, onCancel }: ProfileEditorProps)
                   className={`pe-toggle-btn${type === t ? ' active' : ''}`}
                   onClick={() => setType(t)}
                 >
-                  {t === 'self' ? '🧑 Self' : '👤 Villain'}
+                  {t === 'self' ? '🧑 Hero' : '👤 Villain'}
                 </button>
               ))}
             </div>
@@ -221,7 +221,7 @@ export function ProfileEditor({ initial, onSave, onCancel }: ProfileEditorProps)
 
         <p className="pe-hint">
           {type === 'self'
-            ? 'Self profiles compare your tendencies against GTO in drills.'
+            ? 'Hero profiles compare your tendencies against GTO in drills.'
             : 'Villain profiles can replace fixed archetypes in the Opponent Simulator.'}
           {' '}Positions shown: <strong>{getPositionsForTableSize(tableSize).join(', ')}</strong>.
         </p>
