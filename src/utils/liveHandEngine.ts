@@ -161,6 +161,11 @@ export function foldedSeats(actions: LiveHandAction[]): Set<SeatId> {
   return new Set(actions.filter(action => action.action === 'fold').map(action => action.seatId));
 }
 
+export function unfoldedSeats(actions: LiveHandAction[], seatedPlayers: SeatId[]): SeatId[] {
+  const folded = foldedSeats(actions);
+  return seatedPlayers.filter(seatId => !folded.has(seatId));
+}
+
 export function allInSeats(actions: LiveHandAction[]): Set<SeatId> {
   return new Set(actions.filter(action => action.action === 'all-in').map(action => action.seatId));
 }
@@ -252,6 +257,16 @@ export function nextGuidedActionState({
   tableSize: number;
   buttonSeat: SeatId;
 }): GuidedActionState {
+  const remainingUnfolded = unfoldedSeats(actions, seatedPlayers);
+  if (remainingUnfolded.length <= 1) {
+    return {
+      street,
+      seatId: remainingUnfolded[0] ?? null,
+      roundClosed: true,
+      handActionClosed: true,
+    };
+  }
+
   const nextSeat = nextActorAfter({ actions, street, actedSeat, seatedPlayers, tableSize });
   if (nextSeat !== null) {
     return { street, seatId: nextSeat, roundClosed: false, handActionClosed: false };

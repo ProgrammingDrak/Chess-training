@@ -31,6 +31,20 @@ const dbConfigured = Boolean(process.env.DATABASE_URL);
 const skipSchemaInit = process.env.SKIP_SCHEMA_INIT === 'true';
 
 const BCRYPT_ROUNDS = 12;
+const USER_TIERS = new Set(['user', 'gold', 'platinum', 'diamond']);
+
+function normalizeUserTier(tier) {
+  return USER_TIERS.has(tier) ? tier : 'user';
+}
+
+function serializeUser(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    tier: normalizeUserTier(user.membership_tier),
+    createdAt: user.created_at,
+  };
+}
 
 // ── Schema init ───────────────────────────────────────────────────────────────
 
@@ -200,16 +214,17 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
 
     const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const { rows } = await pool.query(
-      'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, created_at',
+      'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, membership_tier, created_at',
       [username, hash]
     );
     const user = rows[0];
 
     req.session.userId = user.id;
     req.session.username = user.username;
+    req.session.membershipTier = normalizeUserTier(user.membership_tier);
 
     res.status(201).json({
-      user: { id: user.id, username: user.username, createdAt: user.created_at },
+      user: serializeUser(user),
     });
   } catch (err) {
     console.error('[auth] register error:', err);
@@ -237,8 +252,9 @@ app.post('/api/auth/login', requireDb, async (req, res) => {
 
     req.session.userId = user.id;
     req.session.username = user.username;
+    req.session.membershipTier = normalizeUserTier(user.membership_tier);
 
-    res.json({ user: { id: user.id, username: user.username, createdAt: user.created_at } });
+    res.json({ user: serializeUser(user) });
   } catch (err) {
     console.error('[auth] login error:', err);
     res.status(500).json({ error: 'Login failed' });
@@ -253,9 +269,31 @@ app.post('/api/auth/logout', (req, res) => {
   });
 });
 
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
   if (!req.session.userId) return res.json({ user: null });
-  res.json({ user: { id: req.session.userId, username: req.session.username } });
+  if (dbConfigured && pool) {
+    const ok = await checkDbHealth(pool);
+    if (ok) {
+      try {
+        const { rows } = await pool.query(
+          'SELECT membership_tier FROM users WHERE id = $1',
+          [req.session.userId]
+        );
+        if (rows[0]) {
+          req.session.membershipTier = normalizeUserTier(rows[0].membership_tier);
+        }
+      } catch (err) {
+        console.warn('[auth] failed to refresh membership tier:', err.message);
+      }
+    }
+  }
+  res.json({
+    user: {
+      id: req.session.userId,
+      username: req.session.username,
+      tier: normalizeUserTier(req.session.membershipTier),
+    },
+  });
 });
 
 // ── Profile routes ────────────────────────────────────────────────────────────

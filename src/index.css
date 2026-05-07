@@ -6754,6 +6754,36 @@ button {
   flex-direction: column;
 }
 
+.live-hand-history-archive {
+  margin-top: 6px;
+}
+
+.live-hand-history-archive summary {
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  list-style: none;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-3);
+}
+
+.live-hand-history-archive summary::-webkit-details-marker {
+  display: none;
+}
+
+.live-hand-history-archive summary:hover {
+  color: var(--text-secondary);
+}
+
+.live-hand-history-archive[open] summary {
+  margin-bottom: 4px;
+}
+
 .live-hand-history-item {
   padding: 7px 0;
   border-bottom: 1px solid var(--border);
