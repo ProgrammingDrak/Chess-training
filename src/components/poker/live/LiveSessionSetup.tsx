@@ -58,6 +58,13 @@ export function LiveSessionSetup({
   onStart,
 }: LiveSessionSetupProps) {
   const [name, setName] = useState('');
+  const [venue, setVenue] = useState('');
+  const [address, setAddress] = useState('');
+  const [groupTag, setGroupTag] = useState('');
+  const [notes, setNotes] = useState('');
+  const [currency, setCurrency] = useState('$');
+  const [smallBlindRaw, setSmallBlindRaw] = useState('1');
+  const [bigBlindRaw, setBigBlindRaw] = useState('2');
   const [tableSize, setTableSize] = useState(initialTableSize);
   const [seats, setSeats] = useState<LiveSeat[]>(() => blankSeats(initialTableSize));
   const [buttonSeat, setButtonSeat] = useState<SeatId | null>(null);
@@ -159,7 +166,9 @@ export function LiveSessionSetup({
     }
   };
 
-  const canStart = occupiedSeats.length >= 2 && buttonSeat !== null;
+  const smallBlind = Math.max(0, Number(smallBlindRaw) || 0);
+  const bigBlind = Math.max(0, Number(bigBlindRaw) || 0);
+  const canStart = occupiedSeats.length >= 2 && buttonSeat !== null && bigBlind > 0;
 
   const handleStart = () => {
     if (!canStart || buttonSeat === null) return;
@@ -167,12 +176,29 @@ export function LiveSessionSetup({
     const session: LiveSession = {
       id: newSessionId(),
       name: name.trim() || undefined,
+      details: {
+        ...(venue.trim() ? { venue: venue.trim() } : {}),
+        ...(address.trim() ? { address: address.trim() } : {}),
+        ...(groupTag.trim() ? { groupTag: groupTag.trim() } : {}),
+        ...(notes.trim() ? { notes: notes.trim() } : {}),
+      },
       startedAt: now,
       endedAt: null,
       tableSize,
       initialButtonSeat: buttonSeat,
       seats,
       hands: [],
+      blindLevels: [{
+        effectiveFromHandIndex: 0,
+        smallBlind,
+        bigBlind,
+        currency: currency.trim() || '$',
+      }],
+      stakes: {
+        sbBB: smallBlind,
+        bbBB: bigBlind,
+        currency: currency.trim() || '$',
+      },
       updatedAt: now,
     };
     onStart(session);
@@ -243,6 +269,82 @@ export function LiveSessionSetup({
             placeholder="e.g. Saturday $2/$5 home game"
             value={name}
             onChange={e => setName(e.target.value)}
+          />
+        </label>
+
+        <label className="live-setup-field">
+          <span className="live-setup-label">Venue / host (optional)</span>
+          <input
+            className="live-setup-input"
+            type="text"
+            placeholder="e.g. Chris's house, Harrah's Cherokee"
+            value={venue}
+            onChange={e => setVenue(e.target.value)}
+          />
+        </label>
+
+        <label className="live-setup-field">
+          <span className="live-setup-label">Address (optional)</span>
+          <input
+            className="live-setup-input"
+            type="text"
+            placeholder="Address or location note"
+            value={address}
+            onChange={e => setAddress(e.target.value)}
+          />
+        </label>
+
+        <label className="live-setup-field">
+          <span className="live-setup-label">Group tag (optional)</span>
+          <input
+            className="live-setup-input"
+            type="text"
+            placeholder="e.g. home-game, casino, tournament"
+            value={groupTag}
+            onChange={e => setGroupTag(e.target.value)}
+          />
+        </label>
+
+        <div className="live-setup-field">
+          <span className="live-setup-label">Starting blinds</span>
+          <div className="live-setup-blinds-row">
+            <input
+              className="live-setup-input live-setup-blind-input"
+              type="text"
+              value={currency}
+              onChange={e => setCurrency(e.target.value)}
+              aria-label="Currency"
+            />
+            <input
+              className="live-setup-input live-setup-blind-input"
+              type="number"
+              min={0}
+              step={0.5}
+              value={smallBlindRaw}
+              onChange={e => setSmallBlindRaw(e.target.value)}
+              aria-label="Small blind"
+            />
+            <span className="live-setup-blind-separator">/</span>
+            <input
+              className="live-setup-input live-setup-blind-input"
+              type="number"
+              min={0.01}
+              step={0.5}
+              value={bigBlindRaw}
+              onChange={e => setBigBlindRaw(e.target.value)}
+              aria-label="Big blind"
+            />
+          </div>
+        </div>
+
+        <label className="live-setup-field">
+          <span className="live-setup-label">Notes (optional)</span>
+          <input
+            className="live-setup-input"
+            type="text"
+            placeholder="Game details, tournament notes, table rules..."
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
           />
         </label>
 
