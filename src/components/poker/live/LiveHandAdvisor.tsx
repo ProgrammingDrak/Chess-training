@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import type {
   LiveHandDecisionSnapshot,
   LivePosition,
@@ -6,11 +6,12 @@ import type {
   SeatId,
 } from '../../../types/liveSession';
 import type { Card } from '../../../types/poker';
-import type { PlayerProfile, RangeAction } from '../../../types/profiles';
+import type { PlayerProfile } from '../../../types/profiles';
+import { DEFAULT_ACTION_CONTEXT } from '../../../types/profiles';
 import { cardsToHandNotation, getLiveHandRecommendation } from '../../../utils/pokerHandRecommendation';
 import { actionBucketFor } from '../../../utils/profileActionBuckets';
 import { handLabel } from '../../../utils/poker';
-import { CardPicker } from '../CardPicker';
+import { ProfileRangeChart } from '../profiles/ProfileRangeChart';
 import './LiveHandAdvisor.css';
 
 interface LiveHandAdvisorProps {
@@ -18,9 +19,12 @@ interface LiveHandAdvisorProps {
   profiles: PlayerProfile[];
   occupiedNow: SeatId[];
   positions: Map<SeatId, LivePosition>;
-  playerNames: Array<string | null>;
-  handIndex: number;
+  cards: Card[];
   disabled?: boolean;
+  showChart?: boolean;
+  showDetail?: boolean;
+  onRequestCards: () => void;
+  onRequestAdvice?: () => void;
   onSnapshotChange: (snapshot: LiveHandDecisionSnapshot | null) => void;
 }
 
@@ -29,31 +33,23 @@ export function LiveHandAdvisor({
   profiles,
   occupiedNow,
   positions,
-  playerNames,
-  handIndex,
+  cards,
   disabled = false,
+  showChart = false,
+  showDetail = false,
+  onRequestCards,
+  onRequestAdvice,
   onSnapshotChange,
 }: LiveHandAdvisorProps) {
-  const [selectedSeatId, setSelectedSeatId] = useState<SeatId | null>(null);
-  const [cards, setCards] = useState<Card[]>([]);
-  const [playedAction, setPlayedAction] = useState<RangeAction | ''>('');
-
-  useEffect(() => {
-    setCards([]);
-    setPlayedAction('');
-  }, [handIndex]);
-
   const preferredSeatId = useMemo<SeatId | null>(() => {
-    const selfSeat = occupiedNow.find(seatId => {
+    const heroSeat = occupiedNow.find(seatId => {
       const profileId = session.seats[seatId]?.player?.playerProfileId;
       return profiles.find(profile => profile.id === profileId)?.type === 'self';
     });
-    return selfSeat ?? occupiedNow[0] ?? null;
+    return heroSeat ?? occupiedNow[0] ?? null;
   }, [occupiedNow, profiles, session.seats]);
 
-  const activeSeatId = selectedSeatId !== null && occupiedNow.includes(selectedSeatId)
-    ? selectedSeatId
-    : preferredSeatId;
+  const activeSeatId = preferredSeatId;
   const activeSeat = activeSeatId !== null ? session.seats[activeSeatId] : null;
   const activeProfileId = activeSeat?.player?.playerProfileId ?? null;
   const activeProfile = activeProfileId
@@ -65,6 +61,12 @@ export function LiveHandAdvisor({
     [cards],
   );
   const handNotation = selectedCards ? cardsToHandNotation(selectedCards[0], selectedCards[1]) : null;
+  const activeProfileSituation = useMemo(() => (
+    activeProfile && activePosition
+      ? activeProfile.positions.find(position => position.position === activePosition)
+        ?.situations[DEFAULT_ACTION_CONTEXT] ?? null
+      : null
+  ), [activePosition, activeProfile]);
 
   const recommendation = useMemo(() => {
     if (!handNotation || !activePosition) return null;
@@ -98,13 +100,14 @@ export function LiveHandAdvisor({
       recommendedActionLabel: recommendation.actionLabel,
       gtoAction: recommendation.gtoAction,
       gtoActionLabel: recommendation.gtoActionLabel,
-      ...(playedAction ? { playedAction } : {}),
+      ...(actionBucket ? { recommendedBucketKind: actionBucket.kind } : {}),
+      ...(actionBucket?.maxBB !== undefined ? { recommendedBucketMaxBB: actionBucket.maxBB } : {}),
     };
   }, [
     activePosition,
     activeProfileId,
     activeSeatId,
-    playedAction,
+    actionBucket,
     recommendation,
     selectedCards,
   ]);
@@ -122,62 +125,48 @@ export function LiveHandAdvisor({
       <div className="live-hand-advisor-header">
         <div>
           <h2>Should I play this hand?</h2>
-          <p>Pick your seat and hole cards. The recommendation will save with the hand when you tap the winner.</p>
+          <p>{selectedCards ? handLabel(selectedCards[0], selectedCards[1]) : `${activePosition} · ${session.tableSize}-max`}</p>
+          <button
+            type="button"
+            className="btn-secondary live-hand-advisor-card-button"
+            disabled={disabled}
+            onClick={onRequestCards}
+          >
+            {selectedCards ? 'Edit Hero cards' : 'Pick Hero cards'}
+          </button>
         </div>
-        {recommendation && actionBucket && (
-          <div className="live-hand-advisor-result" style={{ borderColor: actionBucket.border }}>
+        {recommendation && actionBucket ? (
+          <button
+            type="button"
+            className="live-hand-advisor-result live-hand-advisor-result-button"
+            style={{ borderColor: actionBucket.border }}
+            onClick={onRequestAdvice}
+            disabled={!onRequestAdvice}
+          >
             <span className="live-hand-advisor-hand">{recommendation.handNotation}</span>
             <strong style={{ color: actionBucket.text }}>{actionBucket.emoji} {recommendation.actionLabel}</strong>
             <small>{recommendation.source === 'profile' ? recommendation.profileName : 'GTO fallback'}</small>
+          </button>
+        ) : (
+          <div className="live-hand-advisor-result">
+            <span className="live-hand-advisor-hand">Hero</span>
+            <strong>Pick cards</strong>
+            <small>{activePosition} · {session.tableSize}-max</small>
           </div>
         )}
       </div>
 
-      <div className="live-hand-advisor-grid">
-        <label className="live-hand-advisor-field">
-          <span>Player / seat</span>
-          <select
-            value={activeSeatId}
-            disabled={disabled}
-            onChange={event => {
-              setSelectedSeatId(Number(event.target.value));
-              setPlayedAction('');
-            }}
-          >
-            {occupiedNow.map(seatId => {
-              const position = positions.get(seatId);
-              return (
-                <option key={seatId} value={seatId}>
-                  {playerNames[seatId] ?? `Seat ${seatId + 1}`} · {position ?? '—'}
-                </option>
-              );
-            })}
-          </select>
-        </label>
+      {showChart && activeProfile && activeProfileSituation && (
+        <ProfileRangeChart
+          situation={activeProfileSituation}
+          profileName={activeProfile.name}
+          position={activePosition}
+          tableSize={session.tableSize}
+          highlightedHand={handNotation}
+        />
+      )}
 
-        <label className="live-hand-advisor-field">
-          <span>What did you do?</span>
-          <select
-            value={playedAction}
-            disabled={disabled || !recommendation}
-            onChange={event => setPlayedAction(event.target.value as RangeAction | '')}
-          >
-            <option value="">Not recorded</option>
-            {(recommendation?.buckets ?? []).map(bucket => (
-              <option key={bucket.id} value={bucket.id}>{bucket.label}</option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <CardPicker
-        value={cards}
-        onChange={setCards}
-        maxCards={2}
-        label={`${playerNames[activeSeatId] ?? `Seat ${activeSeatId + 1}`} hole cards`}
-      />
-
-      {recommendation && (
+      {showDetail && recommendation && (
         <div className="live-hand-advisor-detail">
           <div>
             <span className="live-hand-advisor-label">Current hand</span>

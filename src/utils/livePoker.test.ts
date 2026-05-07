@@ -235,6 +235,7 @@ describe('computeStats', () => {
   it('returns zero stats for an empty session', () => {
     const s = computeStats(makeSession(), Date.parse('2026-04-26T18:00:00.000Z'));
     expect(s.totalHands).toBe(0);
+    expect(s.choppedPots).toBe(0);
     expect(s.handsPerHour).toBe(0);
     expect(s.byPlayer).toEqual([]);
     expect(s.byPosition).toEqual([]);
@@ -270,6 +271,50 @@ describe('computeStats', () => {
     expect(stats.totalHands).toBe(2);
     expect(stats.handsPerHour).toBeCloseTo(4, 5);
     expect(stats.elapsedMs).toBe(30 * 60 * 1000);
+  });
+
+  it('excludes paused time from elapsed, hands per hour, and dollars per hour', () => {
+    const session = makeSession({
+      endedAt: '2026-04-26T19:00:00.000Z',
+      pauses: [
+        { startedAt: '2026-04-26T18:15:00.000Z', endedAt: '2026-04-26T18:30:00.000Z' },
+      ],
+      bankroll: {
+        buyIns: [100],
+        cashOut: 190,
+        currency: '$',
+        net: 90,
+        recordedAt: '2026-04-26T19:00:00.000Z',
+      },
+      hands: [
+        {
+          index: 0,
+          startedAt: '2026-04-26T18:00:00.000Z',
+          endedAt: '2026-04-26T18:10:00.000Z',
+          buttonSeat: 0,
+          seatedPlayers: [0, 1, 2],
+          winnerSeat: 0,
+          winnerPlayerProfileId: 'alice',
+          winnerPosition: 'BTN',
+        },
+        {
+          index: 1,
+          startedAt: '2026-04-26T18:30:00.000Z',
+          endedAt: '2026-04-26T18:40:00.000Z',
+          buttonSeat: 1,
+          seatedPlayers: [0, 1, 2],
+          winnerSeat: 1,
+          winnerPlayerProfileId: 'bob',
+          winnerPosition: 'BTN',
+        },
+      ],
+    });
+
+    const stats = computeStats(session, Date.parse('2030-01-01T00:00:00.000Z'));
+
+    expect(stats.elapsedMs).toBe(45 * 60 * 1000);
+    expect(stats.handsPerHour).toBeCloseTo(2 / 0.75, 5);
+    expect(stats.profit?.dollarsPerHour).toBeCloseTo(120, 5);
   });
 
   it('computes per-player win percentage', () => {
@@ -400,6 +445,56 @@ describe('computeStats', () => {
 
     expect(byPos('HJ')?.handsAtPosition).toBe(1);
     expect(byPos('CO')?.handsAtPosition).toBe(2);
+  });
+
+  it('counts skipped hands as table volume but leaves them blank for scored stats', () => {
+    const session = makeSession({
+      hands: [
+        {
+          index: 0, startedAt: '2026-04-26T18:00:00.000Z', endedAt: '2026-04-26T18:01:00.000Z',
+          buttonSeat: 0, seatedPlayers: [0, 1, 2],
+          skipped: true,
+          skippedReason: 'Missed hand',
+        },
+      ],
+    });
+
+    const stats = computeStats(session, Date.parse('2026-04-26T18:30:00.000Z'));
+
+    expect(stats.totalHands).toBe(1);
+    expect(stats.handsPerHour).toBeCloseTo(2, 5);
+    expect(stats.byPlayer).toEqual([]);
+    expect(stats.byPosition).toEqual([]);
+  });
+
+  it('counts chopped pots separately and gives each chopping player full win credit', () => {
+    const session = makeSession({
+      hands: [
+        {
+          index: 0, startedAt: '', endedAt: '',
+          buttonSeat: 0,
+          seatedPlayers: [0, 1, 2],
+          seatedPlayerProfileIds: { '0': 'alice', '1': 'bob', '2': 'carol' },
+          chopped: true,
+          chopSeats: [0, 1],
+          chopPlayerProfileIds: ['alice', 'bob'],
+          chopPositions: ['BTN', 'SB'],
+        },
+      ],
+    });
+
+    const stats = computeStats(session, Date.parse('2026-04-26T19:00:00.000Z'));
+    const byId = (id: string) => stats.byPlayer.find(p => p.playerProfileId === id);
+    const byPos = (p: string) => stats.byPosition.find(x => x.position === p);
+
+    expect(stats.totalHands).toBe(1);
+    expect(stats.choppedPots).toBe(1);
+    expect(byId('alice')?.handsWon).toBe(1);
+    expect(byId('bob')?.handsWon).toBe(1);
+    expect(byId('carol')?.handsWon).toBe(0);
+    expect(byPos('BTN')?.handsWonAtPosition).toBe(1);
+    expect(byPos('SB')?.handsWonAtPosition).toBe(1);
+    expect(byPos('BB')?.handsWonAtPosition).toBe(0);
   });
 
   it('handles mid-session player joins (only counts hands they were dealt in)', () => {

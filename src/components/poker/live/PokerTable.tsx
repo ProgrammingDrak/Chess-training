@@ -1,13 +1,19 @@
-import type { LivePosition, SeatId } from '../../../types/liveSession';
+import type { LivePosition, LiveStackSnapshot, SeatId } from '../../../types/liveSession';
 import { SeatChip } from './SeatChip';
+import { formatLiveNumber } from '../../../utils/liveMoney';
 
 interface PokerTableProps {
   tableSize: number;
   /** Maps seatId → display name (or null for empty). length === tableSize. */
   playerNames: (string | null)[];
   buttonSeat: SeatId | null;
+  actionSeat?: SeatId | null;
   /** Optional position labels per seat (e.g. for active hand display). */
   positions?: Map<SeatId, LivePosition>;
+  /** Optional stack display per seat. */
+  stackInfo?: Map<SeatId, LiveStackSnapshot>;
+  /** Amount each seat has committed on the current betting street, in BB. */
+  streetBets?: Map<SeatId, number>;
   /** Center-area children — usually a status line or tap prompt. */
   centerContent?: React.ReactNode;
   /** Disable per-seat taps based on seatId. */
@@ -32,7 +38,10 @@ export function PokerTable({
   tableSize,
   playerNames,
   buttonSeat,
+  actionSeat,
   positions,
+  stackInfo,
+  streetBets,
   centerContent,
   isSeatDisabled,
   onSeatTap,
@@ -47,6 +56,25 @@ export function PokerTable({
       <div className="live-table-felt">
         {centerContent && <div className="live-table-center">{centerContent}</div>}
       </div>
+
+      {streetBets && Array.from({ length: tableSize }).map((_, seatId) => {
+        const amountBB = streetBets.get(seatId) ?? 0;
+        if (amountBB <= 0) return null;
+        const angle = Math.PI / 2 + (2 * Math.PI * seatId) / tableSize;
+        const radius = 31;
+        const x = 50 + radius * Math.cos(angle);
+        const y = 50 + radius * Math.sin(angle);
+
+        return (
+          <span
+            key={`bet-${seatId}`}
+            className="live-seat-bet-marker"
+            style={{ left: `${x}%`, top: `${y}%` }}
+          >
+            {formatLiveNumber(amountBB)}BB
+          </span>
+        );
+      })}
 
       {Array.from({ length: tableSize }).map((_, seatId) => {
         // Bottom-center is seat 0 (player POV); proceed clockwise.
@@ -68,7 +96,9 @@ export function PokerTable({
               seatId={seatId}
               playerName={playerNames[seatId] ?? null}
               isButton={buttonSeat === seatId}
+              isActionSeat={actionSeat === seatId}
               position={positions?.get(seatId) ?? null}
+              stack={stackInfo?.get(seatId) ?? null}
               disabled={isSeatDisabled?.(seatId)}
               onTap={onSeatTap}
               draggable={Boolean(draggableSeats && playerNames[seatId])}

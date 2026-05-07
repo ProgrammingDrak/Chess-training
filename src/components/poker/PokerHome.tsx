@@ -153,7 +153,7 @@ export function PokerHome({
         <div style={{ flex: 1 }}>
           <div className="drill-module-name">Player Profiles</div>
           <div className="drill-module-desc">
-            Build hand-range profiles for yourself and opponents. 4-color action grid (fold/limp/call/raise),
+            Build hand-range profiles for Hero and opponents. 4-color action grid (fold/limp/call/raise),
             per-position ranges, post-flop thresholds. Use them to benchmark decisions against any playing style.
           </div>
         </div>

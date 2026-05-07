@@ -44,7 +44,7 @@ export function ProfilesHome({
     );
   }
 
-  const selfProfiles    = profiles.filter(p => p.type === 'self');
+  const heroProfiles    = profiles.filter(p => p.type === 'self');
   const villainProfiles = profiles.filter(p => p.type === 'villain');
 
   // ── List view ──────────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ export function ProfilesHome({
         <div>
           <h1 className="profiles-page-title">Player Profiles</h1>
           <p className="profiles-page-desc">
-            Build hand-range profiles for yourself and opponents. Use them in drills to check
+            Build hand-range profiles for Hero and opponents. Use them in drills to check
             decisions against real playing styles.
           </p>
         </div>
@@ -81,7 +81,7 @@ export function ProfilesHome({
               <div className="profiles-tpl-name">{tpl.name}</div>
               <div className="profiles-tpl-desc">{tpl.description}</div>
               <span className={`profiles-type-badge profiles-type-${tpl.type}`}>
-                {tpl.type === 'self' ? '🧑 Self' : '👤 Villain'}
+                {tpl.type === 'self' ? '🧑 Hero' : '👤 Villain'}
               </span>
               <button
                 className="btn-secondary profiles-tpl-btn"
@@ -101,12 +101,12 @@ export function ProfilesHome({
         </div>
       </section>
 
-      {/* ── Self profiles ── */}
-      {user && selfProfiles.length > 0 && (
+      {/* ── Hero profiles ── */}
+      {user && heroProfiles.length > 0 && (
         <section className="profiles-section">
-          <h2 className="profiles-section-title">My Profiles (Self)</h2>
+          <h2 className="profiles-section-title">Hero Profiles</h2>
           <div className="profiles-cards-grid">
-            {selfProfiles.map(p => (
+            {heroProfiles.map(p => (
               <ProfileCard
                 key={p.id}
                 profile={p}
@@ -194,7 +194,7 @@ function ProfileCard({
           <div className="profile-card-name">{profile.name}</div>
           <div className="profile-card-meta">
             <span className={`profiles-type-badge profiles-type-${profile.type}`}>
-              {profile.type === 'self' ? '🧑 Self' : '👤 Villain'}
+              {profile.type === 'self' ? '🧑 Hero' : '👤 Villain'}
             </span>
             <span className="profile-card-size">{profile.tableSize}-handed</span>
             {profile.templateName && (

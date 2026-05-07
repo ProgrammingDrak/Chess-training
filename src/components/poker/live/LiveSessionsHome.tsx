@@ -45,6 +45,12 @@ export function LiveSessionsHome({
     () => [...sessions].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt)),
     [sessions],
   );
+  const latestActiveSession = sortedSessions.find(session => session.endedAt === null) ?? null;
+
+  const reviewSession = (id: string) => {
+    setReviewingId(id);
+    setView('review');
+  };
 
   if (view === 'new') {
     return (
@@ -76,7 +82,7 @@ export function LiveSessionsHome({
           <div className="live-active-title-block">
             <h1 className="live-active-title">{session.name ?? 'Session'}</h1>
             <span className="live-active-ended-tag">
-              {session.endedAt ? 'Ended' : 'Active'}
+              {session.endedAt ? 'Ended' : 'Saved'}
             </span>
           </div>
         </div>
@@ -91,7 +97,7 @@ export function LiveSessionsHome({
             className="btn-primary live-review-resume"
             onClick={() => onResumeSession(session.id)}
           >
-            Resume session →
+            Resume saved session →
           </button>
         )}
       </div>
@@ -105,13 +111,23 @@ export function LiveSessionsHome({
         <div>
           <h1 className="live-home-title">Live Session Tracker</h1>
           <p className="live-home-desc">
-            Track real hands at a real table. Tap the winner of each hand; the button advances
-            automatically. Per-session stats: hands, hands/hr, win % per player and per position.
+            Track real hands at a real table. Resume a saved session any time, or start a new one.
+            Per-session stats: hands, hands/hr, win % per player and per position.
           </p>
         </div>
-        <button className="btn-primary live-home-new-btn" onClick={() => setView('new')}>
-          + New Session
-        </button>
+        <div className="live-home-header-actions">
+          {latestActiveSession && (
+            <button
+              className="btn-secondary live-home-resume-btn"
+              onClick={() => onResumeSession(latestActiveSession.id)}
+            >
+              Resume Saved Session
+            </button>
+          )}
+          <button className="btn-primary live-home-new-btn" onClick={() => setView('new')}>
+            + New Session
+          </button>
+        </div>
       </div>
 
       {sortedSessions.length === 0 ? (
@@ -125,10 +141,10 @@ export function LiveSessionsHome({
             const isActive = s.endedAt === null;
             return (
               <div key={s.id} className={`live-home-card ${isActive ? 'live-home-card-active' : ''}`}>
-                <div className="live-home-card-main" onClick={() => { setReviewingId(s.id); setView('review'); }}>
+                <div className="live-home-card-main" onClick={() => reviewSession(s.id)}>
                   <div className="live-home-card-title">
                     {s.name ?? 'Untitled session'}
-                    {isActive && <span className="live-home-card-active-tag">LIVE</span>}
+                    {isActive && <span className="live-home-card-active-tag">SAVED</span>}
                   </div>
                   <div className="live-home-card-meta">
                     {formatDate(s.startedAt)}
@@ -140,12 +156,19 @@ export function LiveSessionsHome({
                   </div>
                 </div>
                 <div className="live-home-card-actions">
-                  {isActive && (
+                  {isActive ? (
                     <button
                       className="btn-primary live-home-card-resume"
                       onClick={() => onResumeSession(s.id)}
                     >
                       Resume
+                    </button>
+                  ) : (
+                    <button
+                      className="btn-secondary live-home-card-review"
+                      onClick={() => reviewSession(s.id)}
+                    >
+                      Review
                     </button>
                   )}
                   <button
