@@ -105,6 +105,7 @@ const BET_PRESETS: { key: BetPreset; label: string; fraction: number | null }[] 
 ];
 
 const PREFLOP_ACTION_PRESETS: { key: ActionAmountPreset; label: string }[] = [
+  { key: 'min', label: 'Min' },
   { key: 'twoHalf', label: '2.5BB' },
   { key: 'three', label: '3BB' },
   { key: 'four', label: '4BB' },
@@ -112,6 +113,7 @@ const PREFLOP_ACTION_PRESETS: { key: ActionAmountPreset; label: string }[] = [
   { key: 'custom', label: 'Custom' },
 ];
 const POSTFLOP_ACTION_PRESETS: { key: ActionAmountPreset; label: string }[] = [
+  { key: 'min', label: 'Min' },
   { key: 'thirdPot', label: '1/3 pot' },
   { key: 'halfPot', label: '1/2 pot' },
   { key: 'twoThirdsPot', label: '2/3 pot' },
@@ -479,6 +481,37 @@ export function LiveSessionActive({
     return Math.max(0, snapshot.startingStackBB - committed);
   };
 
+  const minRaiseAmountBB = (seatId: SeatId): number => {
+    const summary = actionSummary(currentHandActions, currentStreet, seatId);
+    if (summary.currentBetBB <= 0) return 1;
+
+    const streetActions = currentHandActions
+      .filter(action => action.street === currentStreet)
+      .slice()
+      .sort((a, b) => a.order - b.order);
+    const hasVoluntaryBetOrRaise = streetActions.some(action => action.action === 'bet' || action.action === 'raise' || action.action === 'all-in');
+    const contributions = new Map<SeatId, number>();
+    let currentMax = 0;
+    let lastFullRaiseIncrement = hasVoluntaryBetOrRaise ? 1 : Math.max(summary.currentBetBB, 1);
+
+    for (const action of streetActions) {
+      const amountBB = action.amountBB ?? 0;
+      if (amountBB <= 0) continue;
+      const nextContribution = (contributions.get(action.seatId) ?? 0) + amountBB;
+      contributions.set(action.seatId, nextContribution);
+      if (nextContribution <= currentMax) continue;
+
+      const increment = nextContribution - currentMax;
+      currentMax = nextContribution;
+      if (!hasVoluntaryBetOrRaise) continue;
+      if (action.action !== 'all-in' || increment >= lastFullRaiseIncrement) {
+        lastFullRaiseIncrement = Math.max(increment, 1);
+      }
+    }
+
+    return Math.max(0, summary.currentBetBB + lastFullRaiseIncrement - summary.seatContributionBB);
+  };
+
   const actionAmountBB = (preset: ActionAmountPreset, seatId: SeatId): number => {
     const summary = actionSummary(currentHandActions, currentStreet, seatId);
     const remaining = remainingStackBBForSeat(seatId) ?? Number.POSITIVE_INFINITY;
@@ -488,6 +521,7 @@ export function LiveSessionActive({
     let amountBB = 0;
 
     if (preset === 'allIn') amountBB = remaining;
+    else if (preset === 'min') amountBB = minRaiseAmountBB(seatId);
     else if (preset === 'custom') {
       const raw = Math.max(0, toNumber(customActionRaw));
       if (customActionInputMode === 'bb') amountBB = raw;
@@ -497,16 +531,22 @@ export function LiveSessionActive({
       if (preset === 'twoHalf') amountBB = targetTotal(2.5);
       else if (preset === 'three') amountBB = targetTotal(3);
       else if (preset === 'four') amountBB = targetTotal(4);
-      else amountBB = Math.max(summary.toCallBB, 1);
+      else amountBB = minRaiseAmountBB(seatId);
     } else {
       if (preset === 'thirdPot') amountBB = pot / 3;
       else if (preset === 'halfPot') amountBB = pot / 2;
       else if (preset === 'twoThirdsPot') amountBB = pot * (2 / 3);
       else if (preset === 'pot') amountBB = pot;
-      else amountBB = Math.max(summary.toCallBB, 1);
+      else amountBB = minRaiseAmountBB(seatId);
     }
 
     return Math.max(0, Math.min(amountBB, remaining));
+  };
+
+  const openActionSizingSheet = () => {
+    if (!activeActionSummary) return;
+    setActionAmountPreset(activeActionSummary.canRaise ? 'min' : currentStreet === 'preflop' ? 'three' : 'halfPot');
+    setBetSheetOpen(true);
   };
 
   const recordAction = (seatId: SeatId, action: 'check' | 'call' | 'fold' | 'bet' | 'raise' | 'all-in') => {
@@ -1004,7 +1044,7 @@ export function LiveSessionActive({
         >
           {activeActionSummary?.canCheck ? 'Check' : 'Call'}
         </button>
-        <button type="button" className="hl-po-chip" onClick={() => setBetSheetOpen(true)} disabled={actionBarDisabled}>
+        <button type="button" className="hl-po-chip" onClick={openActionSizingSheet} disabled={actionBarDisabled}>
           {activeActionSummary?.canBet ? 'Bet' : 'Raise'}
         </button>
         <button type="button" className="hl-po-chip" onClick={() => effectiveActionSeatId !== null && openOutcomeForSeat(effectiveActionSeatId)} disabled={effectiveActionSeatId === null}>Winner</button>
@@ -1080,7 +1120,6 @@ export function LiveSessionActive({
         actionSeat={!isEnded && !isPaused ? effectiveActionSeatId : null}
         positions={positions}
         stackInfo={currentStackBySeat}
-        bigBlind={currentBlindLevel.bigBlind}
         streetBets={currentStreetBets}
         centerContent={centerContent}
         isSeatDisabled={(seatId) => isEnded || !occupiedNow.includes(seatId)}

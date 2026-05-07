@@ -12,7 +12,6 @@ interface PokerTableProps {
   positions?: Map<SeatId, LivePosition>;
   /** Optional stack display per seat. */
   stackInfo?: Map<SeatId, LiveStackSnapshot>;
-  bigBlind?: number;
   /** Amount each seat has committed on the current betting street, in BB. */
   streetBets?: Map<SeatId, number>;
   /** Center-area children — usually a status line or tap prompt. */
@@ -42,7 +41,6 @@ export function PokerTable({
   actionSeat,
   positions,
   stackInfo,
-  bigBlind,
   streetBets,
   centerContent,
   isSeatDisabled,
@@ -101,7 +99,6 @@ export function PokerTable({
               isActionSeat={actionSeat === seatId}
               position={positions?.get(seatId) ?? null}
               stack={stackInfo?.get(seatId) ?? null}
-              bigBlind={bigBlind}
               disabled={isSeatDisabled?.(seatId)}
               onTap={onSeatTap}
               draggable={Boolean(draggableSeats && playerNames[seatId])}

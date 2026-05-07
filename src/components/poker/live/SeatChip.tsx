@@ -9,7 +9,6 @@ interface SeatChipProps {
   isActionSeat?: boolean;
   position: LivePosition | null;
   stack?: LiveStackSnapshot | null;
-  bigBlind?: number;
   isWinner?: boolean;
   disabled?: boolean;
   draggable?: boolean;
@@ -28,7 +27,6 @@ export function SeatChip({
   isActionSeat,
   position,
   stack,
-  bigBlind,
   isWinner,
   disabled,
   draggable,
