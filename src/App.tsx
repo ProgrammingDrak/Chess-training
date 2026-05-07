@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 import type { Opening, AppView } from './types';
 import type { PokerDrillType } from './types/poker';
 import type { BlackjackDrillType } from './types/blackjack';
+import type { UserTier } from './types/tiers';
 import { useProgress } from './hooks/useProgress';
 import { usePokerProgress } from './hooks/usePokerProgress';
 import { useBlackjackProgress } from './hooks/useBlackjackProgress';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/auth/AuthModal';
+import { TierGateModal } from './components/TierGateModal';
 import { GameSelector } from './components/GameSelector';
 import { OpeningSelector } from './components/OpeningSelector';
 import { LineSelector } from './components/LineSelector';
@@ -25,10 +27,22 @@ import { useLiveSessions } from './hooks/useLiveSessions';
 import { BlackjackHome } from './components/blackjack/BlackjackHome';
 import { BlackjackDrillRouter } from './components/blackjack/BlackjackDrillRouter';
 import { BlackjackDashboard } from './components/blackjack/BlackjackDashboard';
+import { FEATURE_TIERS, POKER_DRILL_TIERS } from './data/featureTiers';
+import { canAccessTier, getTierLabel } from './types/tiers';
 
 const CHESS_VIEWS: AppView[] = ['chess_home', 'opening_detail', 'practice', 'challenge', 'dashboard'];
 const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup', 'poker_live_home', 'poker_live_active'];
 const BLACKJACK_VIEWS: AppView[] = ['blackjack_home', 'blackjack_drill', 'blackjack_dashboard'];
+
+const POKER_DRILL_NAMES: Record<PokerDrillType, string> = {
+  hand_selection: 'Hand Selection',
+  pot_odds: 'Pot Odds',
+  equity_estimation: 'Equity Estimator',
+  bet_sizing: 'Bet Sizing',
+  opponent_simulation: 'Opponent Simulator',
+  ev_calculation: 'EV Calculator',
+  range_reading: 'Range Reading',
+};
 
 function getInitialTheme(): 'dark' | 'light' {
   try {
@@ -47,6 +61,7 @@ function AuthButton({ onOpenModal }: { onOpenModal: () => void }) {
     return (
       <div className="nav-auth">
         <span className="nav-username">{user.username}</span>
+        <span className={`nav-tier-badge tier-${user.tier}`}>{getTierLabel(user.tier)}</span>
         <button className="nav-link nav-logout" onClick={logout}>
           Log Out
         </button>
@@ -69,9 +84,11 @@ function AuthButton({ onOpenModal }: { onOpenModal: () => void }) {
 // ── Main app (inner — must be inside AuthProvider) ────────────────────────────
 
 function AppInner() {
+  const { user } = useAuth();
   const [theme, setTheme] = useState<'dark' | 'light'>(getInitialTheme);
   const [view, setView] = useState<AppView>('home');
   const [showAuth, setShowAuth] = useState(false);
+  const [tierGate, setTierGate] = useState<{ featureName: string; requiredTier: UserTier } | null>(null);
   const [selectedOpening, setSelectedOpening] = useState<Opening | null>(null);
   const [practiceLineIndex, setPracticeLineIndex] = useState(0);
   const [pokerDrillType, setPokerDrillType] = useState<PokerDrillType | null>(null);
@@ -95,6 +112,21 @@ function AppInner() {
   const inPoker = POKER_VIEWS.includes(view);
   const inBlackjack = BLACKJACK_VIEWS.includes(view);
 
+  useEffect(() => {
+    const lockedViews: Partial<Record<AppView, { featureName: string; requiredTier: UserTier }>> = {
+      poker_profiles: { featureName: 'Player Profiles', requiredTier: FEATURE_TIERS.pokerProfiles },
+      poker_hand_lookup: { featureName: 'What Should I Do?', requiredTier: FEATURE_TIERS.pokerHandLookup },
+      poker_live_home: { featureName: 'Live Session Tracker', requiredTier: FEATURE_TIERS.pokerLiveSession },
+      poker_live_active: { featureName: 'Live Session Tracker', requiredTier: FEATURE_TIERS.pokerLiveSession },
+    };
+    const lockedView = lockedViews[view];
+    if (!lockedView || canAccessTier(user?.tier ?? null, lockedView.requiredTier)) return;
+
+    if (view === 'poker_live_active') setActiveLiveSessionId(null);
+    setView('poker_home');
+    setTierGate(lockedView);
+  }, [user?.tier, view]);
+
   const handleSelectOpening = (opening: Opening) => {
     setSelectedOpening(opening);
     setView('opening_detail');
@@ -110,13 +142,36 @@ function AppInner() {
   };
 
   const handleSelectPokerDrill = (drillType: PokerDrillType) => {
-    setPokerDrillType(drillType);
-    setView('poker_drill');
+    const requiredTier = POKER_DRILL_TIERS[drillType];
+    const openDrill = () => {
+      setPokerDrillType(drillType);
+      setView('poker_drill');
+    };
+
+    if (!requiredTier) {
+      openDrill();
+      return;
+    }
+
+    requireTier(requiredTier, POKER_DRILL_NAMES[drillType], openDrill);
   };
 
   const handleSelectBJDrill = (drillType: BlackjackDrillType) => {
     setBjDrillType(drillType);
     setView('blackjack_drill');
+  };
+
+  const requireTier = (requiredTier: UserTier, featureName: string, onAllowed: () => void) => {
+    if (canAccessTier(user?.tier ?? null, requiredTier)) {
+      onAllowed();
+      return;
+    }
+    setTierGate({ requiredTier, featureName });
+  };
+
+  const openAuthFromTierGate = () => {
+    setTierGate(null);
+    setShowAuth(true);
   };
 
   return (
@@ -175,19 +230,19 @@ function AppInner() {
               </button>
               <button
                 className={`nav-link ${view === 'poker_profiles' ? 'active' : ''}`}
-                onClick={() => setView('poker_profiles')}
+                onClick={() => requireTier(FEATURE_TIERS.pokerProfiles, 'Player Profiles', () => setView('poker_profiles'))}
               >
                 Profiles
               </button>
               <button
                 className={`nav-link ${view === 'poker_hand_lookup' ? 'active' : ''}`}
-                onClick={() => setView('poker_hand_lookup')}
+                onClick={() => requireTier(FEATURE_TIERS.pokerHandLookup, 'What Should I Do?', () => setView('poker_hand_lookup'))}
               >
                 Hand Lookup
               </button>
               <button
                 className={`nav-link ${view === 'poker_live_home' || view === 'poker_live_active' ? 'active' : ''}`}
-                onClick={() => setView('poker_live_home')}
+                onClick={() => requireTier(FEATURE_TIERS.pokerLiveSession, 'Live Session Tracker', () => setView('poker_live_home'))}
               >
                 Live Session
               </button>
@@ -289,9 +344,9 @@ function AppInner() {
             getDrillStats={getDrillStats}
             onSelectDrill={handleSelectPokerDrill}
             onViewDashboard={() => setView('poker_dashboard')}
-            onViewProfiles={() => setView('poker_profiles')}
-            onViewHandLookup={() => setView('poker_hand_lookup')}
-            onViewLiveSession={() => setView('poker_live_home')}
+            onViewProfiles={() => requireTier(FEATURE_TIERS.pokerProfiles, 'Player Profiles', () => setView('poker_profiles'))}
+            onViewHandLookup={() => requireTier(FEATURE_TIERS.pokerHandLookup, 'What Should I Do?', () => setView('poker_hand_lookup'))}
+            onViewLiveSession={() => requireTier(FEATURE_TIERS.pokerLiveSession, 'Live Session Tracker', () => setView('poker_live_home'))}
             onBack={() => setView('home')}
           />
         )}
@@ -403,6 +458,15 @@ function AppInner() {
 
       {/* Auth modal */}
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
+      {tierGate && (
+        <TierGateModal
+          featureName={tierGate.featureName}
+          requiredTier={tierGate.requiredTier}
+          currentTier={user?.tier ?? null}
+          onClose={() => setTierGate(null)}
+          onSignIn={openAuthFromTierGate}
+        />
+      )}
     </div>
   );
 }

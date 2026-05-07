@@ -159,6 +159,25 @@ describe('liveHandEngine', () => {
     expect(next).toMatchObject({ street: 'flop', seatId: 0, roundClosed: true });
   });
 
+  it('closes the hand when folds leave one player un-folded', () => {
+    let actions: LiveHandAction[] = [];
+    actions = appendLiveAction({ actions, street: 'preflop', seatId: 0, action: 'post-blind', amountBB: 0.5 });
+    actions = appendLiveAction({ actions, street: 'preflop', seatId: 1, action: 'post-blind', amountBB: 1 });
+    actions = appendLiveAction({ actions, street: 'preflop', seatId: 2, action: 'raise', amountBB: 3 });
+    actions = appendLiveAction({ actions, street: 'preflop', seatId: 3, action: 'fold' });
+    actions = appendLiveAction({ actions, street: 'preflop', seatId: 0, action: 'fold' });
+    actions = appendLiveAction({ actions, street: 'preflop', seatId: 1, action: 'fold' });
+
+    expect(nextGuidedActionState({
+      actions,
+      street: 'preflop',
+      actedSeat: 1,
+      seatedPlayers: [0, 1, 2, 3],
+      tableSize: 4,
+      buttonSeat: 3,
+    })).toMatchObject({ street: 'preflop', seatId: 2, roundClosed: true, handActionClosed: true });
+  });
+
   it('undoes only the latest non-forced action', () => {
     let actions: LiveHandAction[] = [];
     actions = appendLiveAction({ actions, street: 'preflop', seatId: 0, action: 'post-blind', amountBB: 0.5 });

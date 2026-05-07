@@ -1,9 +1,12 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
+import type { UserTier } from '../types/tiers';
+import { normalizeUserTier } from '../types/tiers';
 
 export interface AuthUser {
   id: number;
   username: string;
+  tier: UserTier;
   createdAt?: string;
 }
 
@@ -29,6 +32,10 @@ async function readApiJson<T>(res: Response, fallbackMessage: string): Promise<T
   }
 }
 
+function normalizeAuthUser(user: AuthUser): AuthUser {
+  return { ...user, tier: normalizeUserTier(user.tier) };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     fetch('/api/auth/me', { credentials: 'include', signal: controller.signal })
       .then((r) => readApiJson<{ user: AuthUser | null }>(r, 'Session unavailable'))
-      .then((data) => setUser(data.user ?? null))
+      .then((data) => setUser(data.user ? normalizeAuthUser(data.user) : null))
       .catch(() => setUser(null))
       .finally(() => { clearTimeout(timer); setLoading(false); });
 
@@ -57,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const data = await readApiJson<{ user?: AuthUser; error?: string }>(res, 'Login failed');
     if (!res.ok) throw new Error(data.error ?? 'Login failed');
     if (!data.user) throw new Error('Login failed');
-    setUser(data.user);
+    setUser(normalizeAuthUser(data.user));
   }, []);
 
   const register = useCallback(async (username: string, password: string) => {
@@ -70,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const data = await readApiJson<{ user?: AuthUser; error?: string }>(res, 'Registration failed');
     if (!res.ok) throw new Error(data.error ?? 'Registration failed');
     if (!data.user) throw new Error('Registration failed');
-    setUser(data.user);
+    setUser(normalizeAuthUser(data.user));
   }, []);
 
   const logout = useCallback(async () => {

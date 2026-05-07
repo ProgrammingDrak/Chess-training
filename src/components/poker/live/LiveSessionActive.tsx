@@ -24,6 +24,7 @@ import { occupiedSeatsAt, advanceButton, derivePositions } from '../../../utils/
 import { getLiveHandRecommendation } from '../../../utils/pokerHandRecommendation';
 import { cardKey } from '../../../utils/cardInput';
 import { PokerTable } from './PokerTable';
+import { LiveHandHistory } from './LiveHandHistory';
 import { LiveSessionStats } from './LiveSessionStats';
 import { LiveHandAdvisor } from './LiveHandAdvisor';
 import { SeatPlayerPicker } from './SeatPlayerPicker';
@@ -93,6 +94,10 @@ const BOARD_SELECTION_LABELS: Record<BoardSelection, string> = {
   turn: 'Turn',
   river: 'River',
 };
+
+function requiredBoardCardCount(selection: BoardSelection): number {
+  return selection === 'flop' ? 3 : 1;
+}
 
 const BET_PRESETS: { key: BetPreset; label: string; fraction: number | null }[] = [
   { key: 'none', label: 'No bet', fraction: null },
@@ -221,6 +226,11 @@ export function LiveSessionActive({
   const [heroCards, setHeroCards] = useState<Card[]>([]);
   const [heroCardPromptOpen, setHeroCardPromptOpen] = useState(true);
   const [showLiveAdviceChart, setShowLiveAdviceChart] = useState(false);
+  const [editingWinnerHandIndex, setEditingWinnerHandIndex] = useState<number | null>(null);
+  const [editingWinnerCards, setEditingWinnerCards] = useState<Card[]>([]);
+  const [editingShownHandIndex, setEditingShownHandIndex] = useState<number | null>(null);
+  const [editingShownSeatId, setEditingShownSeatId] = useState<SeatId | null>(null);
+  const [editingShownCards, setEditingShownCards] = useState<Card[]>([]);
   const [heroDecisionSnapshot, setHeroDecisionSnapshot] = useState<LiveHandDecisionSnapshot | null>(null);
   const [activeTabLocal, setActiveTabLocal] = useState<LiveSessionActiveTab>(session.uiPreferences?.activeTab ?? 'live');
   const [cardPickerModeLocal, setCardPickerModeLocal] = useState<LiveCardPickerMode | undefined>(session.uiPreferences?.cardPickerMode);
@@ -345,6 +355,101 @@ export function LiveSessionActive({
   const handleHeroCardsChange = (cards: Card[]) => {
     setHeroCards(cards);
     if (cards.length === 2) setHeroCardPromptOpen(false);
+  };
+
+  const openWinningCardsEditor = (handIndex: number) => {
+    const hand = session.hands.find(item => item.index === handIndex);
+    if (!hand || hand.winnerSeat === undefined || hand.chopped || hand.skipped) return;
+    setEditingWinnerHandIndex(handIndex);
+    setEditingWinnerCards(hand.winningCards ? [...hand.winningCards] : []);
+  };
+
+  const closeWinningCardsEditor = () => {
+    setEditingWinnerHandIndex(null);
+    setEditingWinnerCards([]);
+  };
+
+  const saveWinningCardsEdit = (cards: Card[] | 'no-show') => {
+    if (editingWinnerHandIndex === null) return;
+    const exposed = cards === 'no-show' ? null : toExposedCards(cards);
+    if (cards !== 'no-show' && !exposed) return;
+    onSave({
+      ...session,
+      hands: session.hands.map(hand => (
+        hand.index === editingWinnerHandIndex
+          ? { ...hand, winningCards: exposed }
+          : hand
+      )),
+    });
+    closeWinningCardsEditor();
+  };
+
+  const handleWinningCardsEditChange = (cards: Card[]) => {
+    setEditingWinnerCards(cards);
+    if (cards.length === 2) saveWinningCardsEdit(cards);
+  };
+
+  const openShownHandsEditor = (handIndex: number) => {
+    const hand = session.hands.find(item => item.index === handIndex);
+    if (!hand || hand.winnerSeat === undefined || hand.chopped || hand.skipped) return;
+    setEditingShownHandIndex(handIndex);
+    setEditingShownSeatId(null);
+    setEditingShownCards([]);
+  };
+
+  const closeShownHandsEditor = () => {
+    setEditingShownHandIndex(null);
+    setEditingShownSeatId(null);
+    setEditingShownCards([]);
+  };
+
+  const startEditingShownPlayer = (seatId: SeatId) => {
+    const hand = editingShownHandIndex === null
+      ? null
+      : session.hands.find(item => item.index === editingShownHandIndex) ?? null;
+    const existing = hand?.showdown?.find(item => item.seatId === seatId);
+    setEditingShownSeatId(seatId);
+    setEditingShownCards(existing ? [...existing.cards] : []);
+  };
+
+  const saveShownCardsEdit = (cards: Card[]) => {
+    if (editingShownHandIndex === null || editingShownSeatId === null) return;
+    const exposed = toExposedCards(cards);
+    if (!exposed) return;
+    onSave({
+      ...session,
+      hands: session.hands.map(hand => {
+        if (hand.index !== editingShownHandIndex) return hand;
+        const nextShowdown = [
+          ...(hand.showdown ?? []).filter(item => item.seatId !== editingShownSeatId),
+          { seatId: editingShownSeatId, cards: exposed },
+        ].sort((a, b) => a.seatId - b.seatId);
+        return { ...hand, showdown: nextShowdown };
+      }),
+    });
+    setEditingShownSeatId(null);
+    setEditingShownCards([]);
+  };
+
+  const clearShownCardsEdit = () => {
+    if (editingShownHandIndex === null || editingShownSeatId === null) return;
+    onSave({
+      ...session,
+      hands: session.hands.map(hand => {
+        if (hand.index !== editingShownHandIndex) return hand;
+        const nextShowdown = (hand.showdown ?? []).filter(item => item.seatId !== editingShownSeatId);
+        return {
+          ...hand,
+          ...(nextShowdown.length > 0 ? { showdown: nextShowdown } : { showdown: undefined }),
+        };
+      }),
+    });
+    setEditingShownCards([]);
+  };
+
+  const handleShownCardsEditChange = (cards: Card[]) => {
+    setEditingShownCards(cards);
+    if (cards.length === 2) saveShownCardsEdit(cards);
   };
 
   const selectedBetSizing = useMemo(() => {
@@ -549,6 +654,40 @@ export function LiveSessionActive({
     setBetSheetOpen(true);
   };
 
+  const saveFoldedWinner = (seatId: SeatId, actions: LiveHandAction[]) => {
+    const seat = session.seats[seatId];
+    const winnerPosition = positions.get(seatId);
+    if (!seat?.player || !winnerPosition) return;
+
+    const now = new Date().toISOString();
+    const board = currentBoard();
+    const finalPotBB = totalPotBB(actions);
+    const knownWinningCards = knownHeroWinningCardsForSeat(seatId);
+    const hand: LiveHand = {
+      index: nextHandIndex,
+      startedAt: startedAtForCurrentHand(),
+      endedAt: now,
+      buttonSeat: currentButton,
+      tableSize: session.tableSize,
+      seatedPlayers: [...occupiedNow],
+      seatedPlayerProfileIds: currentSeatedSnapshot(),
+      winnerSeat: seatId,
+      winnerPlayerProfileId: seat.player.playerProfileId,
+      winnerPosition,
+      actions,
+      stackSnapshots: completeStackSnapshots([seatId], actions, finalPotBB),
+      ...(handNote.trim() ? { notes: handNote.trim() } : {}),
+      ...(board ? { board } : {}),
+      winningCards: knownWinningCards,
+      finalPotBB,
+      ...(selectedStraddle ? { straddle: selectedStraddle } : {}),
+      ...(heroDecisionForActions(actions) ? { heroDecision: heroDecisionForActions(actions) } : {}),
+    };
+    onSave({ ...session, nextButtonSeat: undefined, hands: [...session.hands, hand] });
+    resetHandInputs();
+    resetOutcomeModal();
+  };
+
   const recordAction = (seatId: SeatId, action: 'check' | 'call' | 'fold' | 'bet' | 'raise' | 'all-in') => {
     const profileId = playerIdBySeat.get(seatId);
     const summary = actionSummary(currentHandActions, currentStreet, seatId);
@@ -575,6 +714,10 @@ export function LiveSessionActive({
       tableSize: session.tableSize,
       buttonSeat: currentButton,
     });
+    if (nextGuided.handActionClosed && nextGuided.seatId !== null) {
+      saveFoldedWinner(nextGuided.seatId, nextActions);
+      return;
+    }
     setHandActions(nextActions);
     setCurrentStreet(nextGuided.street);
     setActionSeatId(nextGuided.seatId);
@@ -645,6 +788,12 @@ export function LiveSessionActive({
     };
   };
 
+  const knownHeroWinningCardsForSeat = (seatId: SeatId): ExposedCards | null => {
+    if (heroDecisionSnapshot?.seatId === seatId) return [...heroDecisionSnapshot.cards] as ExposedCards;
+    if (heroSeatId === seatId) return toExposedCards(heroCards);
+    return null;
+  };
+
   const handleSeatTap = (seatId: SeatId) => {
     if (isEnded) return;
     if (mode === 'remove-player') {
@@ -662,11 +811,7 @@ export function LiveSessionActive({
     const winnerPosition = positions.get(seatId);
     if (!seat?.player || !winnerPosition) return;
 
-    const advisedCards = heroDecisionSnapshot?.seatId === seatId
-      ? [...heroDecisionSnapshot.cards]
-      : heroSeatId === seatId && heroCards.length > 0
-        ? [...heroCards]
-        : [];
+    const advisedCards = knownHeroWinningCardsForSeat(seatId) ?? [];
     setWinningCards(advisedCards);
     setShownHands([]);
     setShownPickerOpen(false);
@@ -756,6 +901,11 @@ export function LiveSessionActive({
     setShownCards([]);
   };
 
+  const handleWinningCardsChange = (cards: Card[]) => {
+    setWinningCards(cards);
+    if (cards.length === 2) savePendingHand(cards);
+  };
+
   const savePendingHand = (cards: Card[] | 'no-show') => {
     if (!pendingWinner) return;
     const exposed = cards === 'no-show' ? null : toExposedCards(cards);
@@ -801,21 +951,28 @@ export function LiveSessionActive({
     setBoardSlotCards(boardCards[index] ? [boardCards[index]] : []);
   };
 
-  const saveBoardSelection = () => {
+  const saveBoardSelection = (cards: Card[] = boardSlotCards) => {
     if (boardSelection === null) return;
     setBoardCards(prev => {
       const next = [...prev] as BoardCards;
       if (boardSelection === 'flop') {
-        next[0] = boardSlotCards[0] ?? null;
-        next[1] = boardSlotCards[1] ?? null;
-        next[2] = boardSlotCards[2] ?? null;
+        next[0] = cards[0] ?? null;
+        next[1] = cards[1] ?? null;
+        next[2] = cards[2] ?? null;
       } else {
-        next[boardSelection === 'turn' ? 3 : 4] = boardSlotCards[0] ?? null;
+        next[boardSelection === 'turn' ? 3 : 4] = cards[0] ?? null;
       }
       return next;
     });
     setBoardSelection(null);
     setBoardSlotCards([]);
+  };
+
+  const handleBoardSlotCardsChange = (cards: Card[]) => {
+    setBoardSlotCards(cards);
+    if (boardSelection !== null && cards.length === requiredBoardCardCount(boardSelection)) {
+      saveBoardSelection(cards);
+    }
   };
 
   const shownPlayerCandidates = pendingWinner ? pendingWinner.seatedPlayers.filter(seatId => seatId !== pendingWinner.seatId) : [];
@@ -827,6 +984,7 @@ export function LiveSessionActive({
     setShownHands(prev => exposed
       ? [...prev.filter(hand => hand.seatId !== shownSeatId), { seatId: shownSeatId, cards: exposed }]
       : prev.filter(hand => hand.seatId !== shownSeatId));
+    if (cards.length === 2) closeShownPlayerPicker();
   };
 
   const closeShownPlayerPicker = () => {
@@ -1042,7 +1200,7 @@ export function LiveSessionActive({
           onClick={() => effectiveActionSeatId !== null && activeActionSummary && recordAction(effectiveActionSeatId, activeActionSummary.canCheck ? 'check' : 'call')}
           disabled={actionBarDisabled || (!activeActionSummary?.canCheck && !activeActionSummary?.canCall)}
         >
-          {activeActionSummary?.canCheck ? 'Check' : 'Call'}
+          {activeActionSummary?.canCheck ? 'Check' : `Call ${formatNumber(activeActionSummary?.toCallBB ?? 0)}BB`}
         </button>
         <button type="button" className="hl-po-chip" onClick={openActionSizingSheet} disabled={actionBarDisabled}>
           {activeActionSummary?.canBet ? 'Bet' : 'Raise'}
@@ -1146,6 +1304,12 @@ export function LiveSessionActive({
         />
       )}
       {actionBar}
+      <LiveHandHistory
+        session={session}
+        profiles={profiles}
+        onEditWinningCards={openWinningCardsEditor}
+        onEditShownHands={openShownHandsEditor}
+      />
     </div>
   );
 
@@ -1173,7 +1337,11 @@ export function LiveSessionActive({
           <p className="live-stats-empty">Pick Hero hole cards in Live Game to see the exact recommendation and highlighted chart cell.</p>
         )}
       </section>
-      <LiveSessionStats session={session} profiles={profiles} liveTicker={!isEnded && !isPaused} />
+      <LiveSessionStats
+        session={session}
+        profiles={profiles}
+        liveTicker={!isEnded && !isPaused}
+      />
     </div>
   );
 
@@ -1229,6 +1397,32 @@ export function LiveSessionActive({
     </div>
   );
 
+  const editingWinnerHand = editingWinnerHandIndex === null
+    ? null
+    : session.hands.find(hand => hand.index === editingWinnerHandIndex) ?? null;
+  const editingWinnerName = editingWinnerHand?.winnerPlayerProfileId
+    ? profiles.find(profile => profile.id === editingWinnerHand.winnerPlayerProfileId)?.name
+      ?? `Player ${editingWinnerHand.winnerPlayerProfileId.slice(0, 6)}`
+    : editingWinnerHand?.winnerSeat !== undefined
+      ? `Seat ${editingWinnerHand.winnerSeat + 1}`
+      : 'Winner';
+  const editingShownHand = editingShownHandIndex === null
+    ? null
+    : session.hands.find(hand => hand.index === editingShownHandIndex) ?? null;
+  const editingShownCandidates = editingShownHand
+    ? editingShownHand.seatedPlayers.filter(seatId => seatId !== editingShownHand.winnerSeat)
+    : [];
+  const historicalSeatName = (hand: LiveHand, seatId: SeatId): string => {
+    const profileId = hand.seatedPlayerProfileIds?.[String(seatId)]
+      ?? session.seats.find(seat => seat.seatId === seatId)?.player?.playerProfileId;
+    return profileId
+      ? profiles.find(profile => profile.id === profileId)?.name ?? `Player ${profileId.slice(0, 6)}`
+      : `Seat ${seatId + 1}`;
+  };
+  const editingShownSeatName = editingShownHand && editingShownSeatId !== null
+    ? historicalSeatName(editingShownHand, editingShownSeatId)
+    : 'Select player';
+
   return (
     <div className="live-active">
       <div className="live-active-header">
@@ -1277,6 +1471,73 @@ export function LiveSessionActive({
           <label className="hl-sit-field"><span className="hl-label">Cash out</span><input type="number" min={0} step={1} className="hl-num-input" value={cashOutRaw} onChange={e => setCashOutRaw(e.target.value)} /></label>
           <p className="live-confirm-text">Net: {currentBlindLevel.currency ?? '$'}{formatNumber(bankrollNet(buyInsRaw.map(toNumber).filter(value => value > 0), Math.max(0, toNumber(cashOutRaw))))}</p>
           <div className="live-confirm-actions"><button className="btn-secondary" onClick={() => setMode('idle')}>Cancel</button><button className="btn-primary" onClick={handleEndSession}>End session</button></div>
+        </div>
+      )}
+
+      {editingWinnerHand && (
+        <div className="live-card-modal-backdrop" role="presentation">
+          <div className="live-card-modal" role="dialog" aria-modal="true" aria-labelledby="edit-winning-cards-title">
+            <div className="live-card-modal-header">
+              <div>
+                <div className="live-card-modal-kicker">Hand {editingWinnerHand.index + 1}</div>
+                <h2 id="edit-winning-cards-title" className="live-card-modal-title">{editingWinnerName} cards</h2>
+              </div>
+              <button type="button" className="live-card-modal-close" onClick={closeWinningCardsEditor}>×</button>
+            </div>
+            <CardPicker
+              value={editingWinnerCards}
+              onChange={handleWinningCardsEditChange}
+              maxCards={2}
+              label="Winning cards"
+              mode={cardPickerMode}
+              onModeChange={setCardPickerMode}
+            />
+            <div className="live-card-modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => saveWinningCardsEdit('no-show')}>No show</button>
+              <button type="button" className="btn-primary" disabled={editingWinnerCards.length < 1} onClick={() => saveWinningCardsEdit(editingWinnerCards)}>Save cards</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingShownHand && (
+        <div className="live-card-modal-backdrop" role="presentation">
+          <div className="live-card-modal" role="dialog" aria-modal="true" aria-labelledby="edit-shown-cards-title">
+            <div className="live-card-modal-header">
+              <div>
+                <div className="live-card-modal-kicker">Hand {editingShownHand.index + 1}</div>
+                <h2 id="edit-shown-cards-title" className="live-card-modal-title">Shown hands</h2>
+              </div>
+              <button type="button" className="live-card-modal-close" onClick={closeShownHandsEditor}>×</button>
+            </div>
+            <div className="live-card-player-select">
+              {editingShownCandidates.map(seatId => (
+                <button
+                  key={seatId}
+                  type="button"
+                  className={`live-card-player-btn ${editingShownSeatId === seatId ? 'active' : ''}`}
+                  onClick={() => startEditingShownPlayer(seatId)}
+                >
+                  <span>{historicalSeatName(editingShownHand, seatId)}</span>
+                  {editingShownHand.showdown?.some(hand => hand.seatId === seatId) && <small>Shown</small>}
+                </button>
+              ))}
+            </div>
+            {editingShownSeatId !== null && (
+              <CardPicker
+                value={editingShownCards}
+                onChange={handleShownCardsEditChange}
+                maxCards={2}
+                label={`${editingShownSeatName} cards`}
+                mode={cardPickerMode}
+                onModeChange={setCardPickerMode}
+              />
+            )}
+            <div className="live-card-modal-actions">
+              <button type="button" className="btn-secondary" disabled={editingShownSeatId === null} onClick={clearShownCardsEdit}>Clear selected</button>
+              <button type="button" className="btn-primary" onClick={closeShownHandsEditor}>Done</button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1348,7 +1609,7 @@ export function LiveSessionActive({
           <div className={`live-card-modal ${shownPickerOpen ? 'live-card-modal-stacked' : ''}`} role="dialog" aria-modal="true" aria-labelledby="winning-hand-title">
             <div className="live-card-modal-base" aria-hidden={shownPickerOpen}>
               <div className="live-card-modal-header"><div><div className="live-card-modal-kicker">Winning hand</div><h2 id="winning-hand-title" className="live-card-modal-title">{playerNames[pendingWinner.seatId] ?? `Seat ${pendingWinner.seatId + 1}`}</h2></div><button type="button" className="live-card-modal-close" onClick={cancelWinningCards}>×</button></div>
-              <CardPicker value={winningCards} onChange={setWinningCards} maxCards={2} label="Winner cards" mode={cardPickerMode} onModeChange={setCardPickerMode} unavailableCards={knownCards} />
+              <CardPicker value={winningCards} onChange={handleWinningCardsChange} maxCards={2} label="Winner cards" mode={cardPickerMode} onModeChange={setCardPickerMode} unavailableCards={knownCards} />
               {shownHands.length > 0 && <div className="live-card-shown-list">{shownHands.map(hand => <div key={hand.seatId} className="live-card-shown-row"><button type="button" className="live-card-shown-main" onClick={() => startShownPlayerHand(hand.seatId)}><span className="live-card-shown-name">{playerNames[hand.seatId] ?? `Seat ${hand.seatId + 1}`}<small>Shown</small></span><strong>{hand.cards.map(card => `${card.rank}${card.suit.toUpperCase()}`).join(' ')}</strong></button><button type="button" className="live-card-shown-remove" onClick={() => setShownHands(prev => prev.filter(item => item.seatId !== hand.seatId))}>×</button></div>)}</div>}
               <div className="live-card-modal-actions"><button type="button" className="btn-secondary" onClick={() => startShownPlayerHand()}>+ Player</button><button type="button" className="btn-secondary" onClick={() => savePendingHand('no-show')}>No show</button><button type="button" className="btn-primary" disabled={winningCards.length < 1} onClick={() => savePendingHand(winningCards)}>Save hand</button></div>
             </div>
@@ -1368,8 +1629,8 @@ export function LiveSessionActive({
         <div className="live-card-modal-backdrop" role="presentation">
           <div className="live-card-modal live-board-modal" role="dialog" aria-modal="true" aria-labelledby="board-card-title">
             <div className="live-card-modal-header"><div><div className="live-card-modal-kicker">Board card</div><h2 id="board-card-title" className="live-card-modal-title">{BOARD_SELECTION_LABELS[boardSelection]}</h2></div><button type="button" className="live-card-modal-close" onClick={() => { setBoardSelection(null); setBoardSlotCards([]); }}>×</button></div>
-            <CardPicker value={boardSlotCards} onChange={setBoardSlotCards} maxCards={boardSelection === 'flop' ? 3 : 1} label={boardSelection === 'flop' ? 'Flop cards' : 'Board card'} mode={cardPickerMode} onModeChange={setCardPickerMode} unavailableCards={knownCards} />
-            <div className="live-card-modal-actions"><button type="button" className="btn-secondary" onClick={() => { setBoardSlotCards([]); setBoardCards(prev => { const next = [...prev] as BoardCards; if (boardSelection === 'flop') { next[0] = null; next[1] = null; next[2] = null; } else { next[boardSelection === 'turn' ? 3 : 4] = null; } return next; }); setBoardSelection(null); }}>Clear</button><button type="button" className="btn-primary" onClick={saveBoardSelection}>Save {boardSelection === 'flop' ? 'flop' : 'card'}</button></div>
+            <CardPicker value={boardSlotCards} onChange={handleBoardSlotCardsChange} maxCards={requiredBoardCardCount(boardSelection)} label={boardSelection === 'flop' ? 'Flop cards' : 'Board card'} mode={cardPickerMode} onModeChange={setCardPickerMode} unavailableCards={knownCards} />
+            <div className="live-card-modal-actions"><button type="button" className="btn-secondary" onClick={() => { setBoardSlotCards([]); setBoardCards(prev => { const next = [...prev] as BoardCards; if (boardSelection === 'flop') { next[0] = null; next[1] = null; next[2] = null; } else { next[boardSelection === 'turn' ? 3 : 4] = null; } return next; }); setBoardSelection(null); }}>Clear</button><button type="button" className="btn-primary" onClick={() => saveBoardSelection()}>Save {boardSelection === 'flop' ? 'flop' : 'card'}</button></div>
           </div>
         </div>
       )}
