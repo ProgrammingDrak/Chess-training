@@ -22,6 +22,10 @@ function formatElapsed(ms: number): string {
   return `${m}m ${s}s`;
 }
 
+function formatWinCredit(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0$/, '').replace(/\.0$/, '');
+}
+
 export function LiveSessionStats({ session, profiles, liveTicker }: LiveSessionStatsProps) {
   const [now, setNow] = useState(() => Date.now());
 
@@ -48,6 +52,23 @@ export function LiveSessionStats({ session, profiles, liveTicker }: LiveSessionS
       board.river ?? null,
     ].filter((card): card is NonNullable<typeof card> => card !== null);
   };
+  const handOutcomeName = (hand: LiveSession['hands'][number]) => {
+    if (hand.skipped) return 'Skipped hand';
+    if (hand.chopped) return 'Chop pot';
+    return hand.winnerPlayerProfileId ? profileName(hand.winnerPlayerProfileId) : 'Outcome not recorded';
+  };
+  const handOutcomePosition = (hand: LiveSession['hands'][number]) => {
+    if (hand.skipped) return 'Button moved';
+    if (hand.chopped) return hand.chopPositions?.join(' / ') ?? 'Chop';
+    return hand.winnerPosition ?? '—';
+  };
+  const handOutcomeCards = (hand: LiveSession['hands'][number]) => {
+    if (hand.skipped) return hand.skippedReason ?? 'Blank hand';
+    if (hand.chopped) return `${hand.chopSeats?.length ?? 0} players split`;
+    if (hand.winningCards === null) return 'No show';
+    if (hand.winningCards) return handLabel(hand.winningCards[0], hand.winningCards[1]);
+    return 'Not recorded';
+  };
 
   return (
     <div className="live-stats">
@@ -70,7 +91,7 @@ export function LiveSessionStats({ session, profiles, liveTicker }: LiveSessionS
         <section className="live-stats-section">
           <h3 className="live-stats-section-title">Win % per player</h3>
           {stats.byPlayer.length === 0 ? (
-            <p className="live-stats-empty">No hands played yet.</p>
+            <p className="live-stats-empty">No scored hands played yet.</p>
           ) : (
             <table className="live-stats-table">
               <thead>
@@ -83,7 +104,7 @@ export function LiveSessionStats({ session, profiles, liveTicker }: LiveSessionS
                   .map(p => (
                     <tr key={p.playerProfileId}>
                       <td>{profileName(p.playerProfileId)}</td>
-                      <td>{p.handsWon}</td>
+                      <td>{formatWinCredit(p.handsWon)}</td>
                       <td>{p.handsDealtIn}</td>
                       <td>{p.winPct.toFixed(1)}%</td>
                     </tr>
@@ -96,7 +117,7 @@ export function LiveSessionStats({ session, profiles, liveTicker }: LiveSessionS
         <section className="live-stats-section">
           <h3 className="live-stats-section-title">Win % by position</h3>
           {stats.byPosition.length === 0 ? (
-            <p className="live-stats-empty">No hands played yet.</p>
+            <p className="live-stats-empty">No scored hands played yet.</p>
           ) : (
             <table className="live-stats-table">
               <thead>
@@ -109,7 +130,7 @@ export function LiveSessionStats({ session, profiles, liveTicker }: LiveSessionS
                   .map(p => (
                     <tr key={p.position}>
                       <td>{p.position}</td>
-                      <td>{p.handsWonAtPosition}</td>
+                      <td>{formatWinCredit(p.handsWonAtPosition)}</td>
                       <td>{p.handsAtPosition}</td>
                       <td>{p.winPct.toFixed(1)}%</td>
                     </tr>
@@ -131,15 +152,11 @@ export function LiveSessionStats({ session, profiles, liveTicker }: LiveSessionS
                     <span className="live-hand-history-index">#{hand.index + 1}</span>
                     <div className="live-hand-history-winner">
                       <span className="live-hand-history-winner-name">
-                        {profileName(hand.winnerPlayerProfileId)}
+                        {handOutcomeName(hand)}
                       </span>
-                      <span className="live-hand-history-position">{hand.winnerPosition}</span>
+                      <span className="live-hand-history-position">{handOutcomePosition(hand)}</span>
                       <span className="live-hand-history-winner-cards">
-                        {hand.winningCards === null
-                          ? 'No show'
-                          : hand.winningCards
-                            ? handLabel(hand.winningCards[0], hand.winningCards[1])
-                            : 'Not recorded'}
+                        {handOutcomeCards(hand)}
                       </span>
                     </div>
                   </div>
@@ -150,6 +167,19 @@ export function LiveSessionStats({ session, profiles, liveTicker }: LiveSessionS
                           <PlayingCard key={`${card.rank}${card.suit}-${index}`} card={card} size="sm" />
                         ))}
                       </div>
+                    )}
+                    {hand.chopped && hand.chopSeats && hand.chopSeats.length > 0 && (
+                      <details className="live-hand-history-showdown">
+                        <summary>Chopped by {hand.chopSeats.length} players</summary>
+                        <div className="live-hand-history-showdown-list">
+                          {hand.chopSeats.map((seatId, index) => (
+                            <div key={seatId} className="live-hand-history-showdown-row">
+                              <span>{handSeatName(hand, seatId)}</span>
+                              <strong>{hand.chopPositions?.[index] ?? ''}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     )}
                     {hand.heroDecision && (
                       <details className="live-hand-history-showdown live-hand-history-decision">
