@@ -439,7 +439,6 @@ export function LiveSessionSetup({
         playerNames={playerNames}
         buttonSeat={buttonSeat}
         stackInfo={setupStackInfo}
-        bigBlind={bigBlind}
         centerContent={
           <div className="live-table-center-text">
             {occupiedSeats.length < 2
