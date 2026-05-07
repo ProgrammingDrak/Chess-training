@@ -14,14 +14,17 @@
 import type { Card } from './poker';
 import type { RangeAction } from './profiles';
 
-/** Index of a seat at the table.  0-based, length === LiveSession.tableSize. */
+/** Index of a seat at the table. 0-based, length === LiveSession.tableSize. */
 export type SeatId = number;
+
+/** One-card or two-card exposed hand information. */
+export type ExposedCards = [Card] | [Card, Card];
 
 /**
  * A player occupying a seat for some range of hands.
  *
  * `playerProfileId` is a *reference* into the user's PlayerProfile list
- * (see types/profiles.ts) — never a snapshot.  Reading a session later
+ * (see types/profiles.ts) — never a snapshot. Reading a session later
  * dereferences the current profile so edits propagate to historical views.
  */
 export interface SeatPlayer {
@@ -40,7 +43,7 @@ export interface LiveSeat {
 }
 
 /**
- * Position labels assignable in a live session.  Matches the labels used by
+ * Position labels assignable in a live session. Matches the labels used by
  * `getPositionsForTableSize()` in data/poker/profileTemplates so the two
  * modules can swap freely.
  *
@@ -105,7 +108,7 @@ export interface LiveHand {
   /** Snapshot: seats that were dealt cards or would have been dealt in this hand (clockwise order). */
   seatedPlayers: SeatId[];
   /**
-   * Snapshot of player profile ids by seat for this hand.  This keeps
+   * Snapshot of player profile ids by seat for this hand. This keeps
    * historical player stats stable if people are later moved to different
    * physical seats.
    */
@@ -128,8 +131,8 @@ export interface LiveHand {
   winnerPlayerProfileId?: string;
   /** Position label assigned to the winner at hand-end. Omitted for skipped/chopped hands. */
   winnerPosition?: LivePosition;
-  /** Exact hole cards for the winning hand, or null when the winner did not show. */
-  winningCards?: [Card, Card] | null;
+  /** Exact exposed winning cards, or null when the winner did not show. */
+  winningCards?: ExposedCards | null;
   /** Optional profile/range recommendation captured during the live hand. */
   heroDecision?: LiveHandDecisionSnapshot;
 
@@ -145,13 +148,13 @@ export interface LiveHand {
   };
 
   // ── Phase 4 (deferred): showdown hole cards ──
-  showdown?: { seatId: SeatId; cards: [Card, Card] }[];
+  showdown?: { seatId: SeatId; cards: ExposedCards }[];
 }
 
 /**
  * A live poker session at a physical table.
  *
- * `id` is a client-generated UUID (crypto.randomUUID()).  Server upserts
+ * `id` is a client-generated UUID (crypto.randomUUID()). Server upserts
  * by this id, so two devices working offline create distinct rows when
  * they eventually sync — no overwrite races.
  */
@@ -169,12 +172,12 @@ export interface LiveSession {
   /** Seat that held the button at hand 0. */
   initialButtonSeat: SeatId;
   /**
-   * One-hand override used after the active table is resized/reseated.  The
+   * One-hand override used after the active table is resized/reseated. The
    * next recorded hand consumes this value, then normal button advancement
    * resumes from that hand's stored buttonSeat.
    */
   nextButtonSeat?: SeatId;
-  /** All seats; length === tableSize.  Indices are stable seat positions. */
+  /** All seats; length === tableSize. Indices are stable seat positions. */
   seats: LiveSeat[];
   /** Completed hands in chronological order. */
   hands: LiveHand[];
