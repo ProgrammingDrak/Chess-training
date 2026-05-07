@@ -20,6 +20,44 @@ export type SeatId = number;
 /** One-card or two-card exposed hand information. */
 export type ExposedCards = [Card] | [Card, Card];
 
+export interface BlindLevel {
+  /** Hand index at which this blind level becomes active, inclusive. */
+  effectiveFromHandIndex: number;
+  smallBlind: number;
+  bigBlind: number;
+  currency?: string;
+}
+
+export interface LiveBetSizing {
+  /** Seat/player the bet sizing was attached to. */
+  seatId: SeatId;
+  /** Raw dollar/currency amount of the bet at the time it was entered. */
+  amount: number;
+  /** Bet converted into big blinds using the blind level active for this hand. */
+  amountBB: number;
+  /** Pot before the bet, in dollars/currency. */
+  potAmount?: number;
+  /** Pot before the bet, converted into big blinds. */
+  potBB?: number;
+  /** Bet as fraction of pot, e.g. 0.5 = half pot, 1 = pot-sized. */
+  potFraction?: number;
+  /** Big blind used for the conversion so historical hands do not change retroactively. */
+  bigBlindAtHand: number;
+  /** Small blind used for context at the time of the hand. */
+  smallBlindAtHand?: number;
+  /** Original entry mode selected by the user. */
+  inputMode: 'amount' | 'bb';
+}
+
+export interface BankrollLog {
+  buyIns: number[];
+  cashOut: number;
+  currency?: string;
+  /** cashOut - sum(buyIns) */
+  net: number;
+  recordedAt: string;
+}
+
 /**
  * A player occupying a seat for some range of hands.
  *
@@ -136,18 +174,19 @@ export interface LiveHand {
   /** Optional profile/range recommendation captured during the live hand. */
   heroDecision?: LiveHandDecisionSnapshot;
 
-  // ── Phase 2 (deferred): pot + bet sizes ──
+  // ── Phase 2: pot + bet sizes ──
   potBB?: number;
   bets?: { seatId: SeatId; betBB: number }[];
+  betSizing?: LiveBetSizing;
 
-  // ── Phase 3 (deferred): community cards ──
+  // ── Phase 3: community cards ──
   board?: {
     flop?: [Card | null, Card | null, Card | null];
     turn?: Card | null;
     river?: Card | null;
   };
 
-  // ── Phase 4 (deferred): showdown hole cards ──
+  // ── Phase 4: showdown hole cards ──
   showdown?: { seatId: SeatId; cards: ExposedCards }[];
 }
 
@@ -182,8 +221,12 @@ export interface LiveSession {
   /** Completed hands in chronological order. */
   hands: LiveHand[];
 
-  // ── Phase 2 (deferred): stakes metadata ──
+  /** Blind levels over time. The last level with effectiveFromHandIndex <= hand index applies. */
+  blindLevels?: BlindLevel[];
+  /** Backward-compatible current stakes metadata. Prefer blindLevels for hand-level conversion. */
   stakes?: { sbBB?: number; bbBB?: number; currency?: string };
+  /** Optional bankroll result recorded when ending the session. */
+  bankroll?: BankrollLog;
 
   /** Last time the session was modified (ISO). */
   updatedAt: string;
