@@ -80,6 +80,7 @@ export type AppView =
   | 'challenge'           // Challenge mode (5-streak)
   | 'dashboard'
   | 'poker_home'
+  | 'poker_drills'
   | 'poker_drill'
   | 'poker_dashboard'
   | 'poker_profiles'

@@ -8,6 +8,8 @@ interface LiveSessionStatsProps {
   profiles: PlayerProfile[];
   /** When true, ticks the elapsed-time clock once per second. */
   liveTicker?: boolean;
+  isPaused?: boolean;
+  onTogglePause?: () => void;
 }
 
 function formatElapsed(ms: number): string {
@@ -37,6 +39,8 @@ export function LiveSessionStats({
   session,
   profiles,
   liveTicker,
+  isPaused = false,
+  onTogglePause,
 }: LiveSessionStatsProps) {
   const [now, setNow] = useState(() => Date.now());
 
@@ -67,10 +71,17 @@ export function LiveSessionStats({
           <div className="live-stats-stat-value">{stats.handsPerHour.toFixed(1)}</div>
           <div className="live-stats-stat-label">Hands / hr</div>
         </div>
-        <div className="live-stats-stat">
+        <button
+          type="button"
+          className={`live-stats-stat live-stats-elapsed-toggle ${isPaused ? 'paused' : ''}`}
+          onClick={onTogglePause}
+          disabled={!onTogglePause || session.endedAt !== null}
+          aria-pressed={isPaused}
+          title={isPaused ? 'Resume session timer' : 'Pause session timer'}
+        >
           <div className="live-stats-stat-value">{formatElapsed(stats.elapsedMs)}</div>
-          <div className="live-stats-stat-label">Elapsed</div>
-        </div>
+          <div className="live-stats-stat-label">{isPaused ? 'Paused' : 'Elapsed'}</div>
+        </button>
         {stats.profit && (
           <div className="live-stats-stat">
             <div className="live-stats-stat-value">{formatMoney(stats.profit.currency, stats.profit.dollarsPerHour)}</div>
