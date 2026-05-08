@@ -209,6 +209,23 @@ export interface LiveHandDecisionSnapshot {
   recommendedBucketMaxBB?: number;
 }
 
+export interface LiveVillainRangeRead {
+  /** Seat whose range was estimated during the hand. */
+  seatId: SeatId;
+  /** PlayerProfile.id occupying that seat at the time of the read. */
+  playerProfileId?: string;
+  /** Position label assigned to the player when the read was captured. */
+  position?: LivePosition;
+  /** Street on which the read was last updated. */
+  street: LiveStreet;
+  /** Selected 169-grid hand classes, e.g. AKs, AKo, JJ. */
+  hands: string[];
+  /** Optional observer note explaining the range. */
+  note?: string;
+  /** ISO timestamp when the read was last changed. */
+  updatedAt: string;
+}
+
 /**
  * One hand row in a session.
  *
@@ -257,6 +274,8 @@ export interface LiveHand {
   winningCards?: ExposedCards | null;
   /** Optional profile/range recommendation captured during the live hand. */
   heroDecision?: LiveHandDecisionSnapshot;
+  /** Villain ranges estimated live while the hand was in progress. */
+  villainRanges?: LiveVillainRangeRead[];
   /** Full street-by-street action log for this hand. */
   actions?: LiveHandAction[];
   /** Stack snapshots for players dealt into this hand. */

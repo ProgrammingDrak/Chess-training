@@ -43,9 +43,6 @@ function addOrToggleCard(cards: Card[], card: Card, maxCards: number): Card[] {
 }
 
 function defaultPickerMode(): CardPickerMode {
-  if (typeof window !== 'undefined' && window.matchMedia?.('(max-width: 700px)').matches) {
-    return 'quick';
-  }
   return 'grid';
 }
 

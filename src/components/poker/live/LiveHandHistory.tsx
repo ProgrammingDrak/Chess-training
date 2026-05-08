@@ -123,6 +123,24 @@ export function LiveHandHistory({
                 </div>
               </details>
             )}
+            {hand.villainRanges && hand.villainRanges.length > 0 && (
+              <details className="live-hand-history-showdown live-hand-history-decision">
+                <summary>
+                  Range reads: {hand.villainRanges.length}
+                </summary>
+                <div className="live-hand-history-showdown-list">
+                  {hand.villainRanges.map(read => (
+                    <div key={`${read.seatId}-${read.updatedAt}`} className="live-hand-history-showdown-row">
+                      <span>
+                        {handSeatName(hand, read.seatId)} - {read.position ?? read.street}
+                        {read.note ? ` - ${read.note}` : ''}
+                      </span>
+                      <strong>{read.hands.length} hands</strong>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
             {visibleBoardCards.length > 0 && (
               <div className="live-hand-history-board">
                 {visibleBoardCards.map((card, index) => (

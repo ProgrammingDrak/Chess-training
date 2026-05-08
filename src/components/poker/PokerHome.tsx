@@ -1,70 +1,6 @@
-import type { PokerProgress, PokerDrillType } from '../../types/poker';
-
-interface DrillModule {
-  type: PokerDrillType;
-  icon: string;
-  name: string;
-  description: string;
-  scenarioCount: number;
-}
-
-const DRILL_MODULES: DrillModule[] = [
-  {
-    type: 'hand_selection',
-    icon: '🃏',
-    name: 'Hand Selection',
-    description: 'Given your position and hole cards, decide: fold, call, or raise? Master GTO preflop ranges.',
-    scenarioCount: 40,
-  },
-  {
-    type: 'pot_odds',
-    icon: '%',
-    name: 'Pot Odds',
-    description: 'Calculate the required equity to profitably call a bet. Core math every poker player must know.',
-    scenarioCount: 25,
-  },
-  {
-    type: 'equity_estimation',
-    icon: '~',
-    name: 'Equity Estimator',
-    description: 'Use the Rule of 4 & 2 to quickly estimate your draw equity on the flop and turn.',
-    scenarioCount: 20,
-  },
-  {
-    type: 'bet_sizing',
-    icon: '$',
-    name: 'Bet Sizing',
-    description: 'Choose the GTO-optimal bet size based on board texture, position, and range advantage.',
-    scenarioCount: 24,
-  },
-  {
-    type: 'opponent_simulation',
-    icon: '👤',
-    name: 'Opponent Simulator',
-    description: 'Play against different player types — NITs, LAGs, Calling Stations, Maniacs. Learn to exploit each.',
-    scenarioCount: 30,
-  },
-  {
-    type: 'ev_calculation',
-    icon: 'EV',
-    name: 'EV Calculator',
-    description: 'Calculate expected value from outcomes and probabilities. Make every decision mathematically sound.',
-    scenarioCount: 20,
-  },
-  {
-    type: 'range_reading',
-    icon: '🔍',
-    name: 'Range Reading',
-    description: 'Street-by-street, narrow an opponent\'s range. Identify their hand type by the flop — then guess the exact holding by the river.',
-    scenarioCount: 8,
-  },
-];
-
 interface PokerHomeProps {
-  pokerProgress: PokerProgress;
-  getDrillStats: (drillType: PokerDrillType) => { totalAttempts: number; correctAttempts: number; accuracy: number };
-  onSelectDrill: (drillType: PokerDrillType) => void;
   onViewDashboard: () => void;
+  onViewDrills: () => void;
   onViewProfiles: () => void;
   onViewHandLookup: () => void;
   onViewLiveSession: () => void;
@@ -72,8 +8,8 @@ interface PokerHomeProps {
 }
 
 export function PokerHome({
-  getDrillStats,
-  onSelectDrill,
+  onViewDashboard,
+  onViewDrills,
   onViewProfiles,
   onViewHandLookup,
   onViewLiveSession,
@@ -84,51 +20,28 @@ export function PokerHome({
         <div>
           <h1>♠ Poker GTO Training</h1>
           <p className="poker-home-subtitle">
-            Seven targeted drill modules built on Game Theory Optimal fundamentals.
-            Master the math, ranges, and exploitative adjustments that separate winning players.
+            Your poker workspace for drills, lookup tools, profiles, and live session tracking.
+            Train the fundamentals, then bring those decisions to the table.
           </p>
         </div>
       </div>
 
-      <div className="drill-modules-grid">
-        {DRILL_MODULES.map((module) => {
-          const stats = getDrillStats(module.type);
-          const hasStarted = stats.totalAttempts > 0;
-
-          return (
-            <button
-              key={module.type}
-              className="drill-module-card"
-              onClick={() => onSelectDrill(module.type)}
-            >
-              <div className="drill-module-icon">{module.icon}</div>
-              <div className="drill-module-name">{module.name}</div>
-              <div className="drill-module-desc">{module.description}</div>
-              <div className="drill-module-meta">
-                <span className="drill-module-difficulty">{module.scenarioCount} scenarios</span>
-                {hasStarted && (
-                  <span
-                    className="drill-module-accuracy"
-                    style={{ color: stats.accuracy >= 70 ? 'var(--green)' : stats.accuracy >= 50 ? 'var(--yellow)' : 'var(--red)' }}
-                  >
-                    {stats.accuracy}%
-                  </span>
-                )}
-              </div>
-              {hasStarted && (
-                <div className="drill-module-bar">
-                  <div
-                    className="drill-module-bar-fill"
-                    style={{ width: `${stats.accuracy}%`, background: stats.accuracy >= 70 ? 'var(--green)' : stats.accuracy >= 50 ? 'var(--yellow)' : 'var(--red)' }}
-                  />
-                </div>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Tools section: Hand Lookup + Profiles */}
+      {/* Tools section */}
+      <button
+        className="drill-module-card"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
+        onClick={onViewDrills}
+      >
+        <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>DR</div>
+        <div style={{ flex: 1 }}>
+          <div className="drill-module-name">Drills</div>
+          <div className="drill-module-desc">
+            Hand selection, pot odds, equity estimator, bet sizing, opponent simulator,
+            EV calculator, and range reading now live together in one drill workspace.
+          </div>
+        </div>
+        <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
+      </button>
       <button
         className="drill-module-card"
         style={{ flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
@@ -136,10 +49,10 @@ export function PokerHome({
       >
         <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>🔎</div>
         <div style={{ flex: 1 }}>
-          <div className="drill-module-name">What Should I Do?</div>
+          <div className="drill-module-name">Hand Lookup Lab</div>
           <div className="drill-module-desc">
-            Pick your hole cards, position, and table size. Get the GTO recommendation for RFI and compare
-            it to any saved profile — with the hand highlighted on the range grid.
+            Look up exact hole cards, add flop, turn, and river runouts, then compare street-by-street
+            equity, made-hand stats, draw pressure, and preflop range context.
           </div>
         </div>
         <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
@@ -171,6 +84,20 @@ export function PokerHome({
             Track real hands at a real table. Tap the winner of each hand; the button advances
             automatically. Per-session stats: hands played, hands per hour, win % per player, win %
             by position.
+          </div>
+        </div>
+        <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
+      </button>
+      <button
+        className="drill-module-card"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
+        onClick={onViewDashboard}
+      >
+        <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>ST</div>
+        <div style={{ flex: 1 }}>
+          <div className="drill-module-name">My Stats</div>
+          <div className="drill-module-desc">
+            Review drill accuracy, attempts, progress trends, and reset poker training stats.
           </div>
         </div>
         <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>

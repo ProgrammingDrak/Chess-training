@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BankrollLog,
   BlindLevel,
@@ -15,6 +15,7 @@ import type {
   LiveSession,
   LiveStackSnapshot,
   LiveStraddle,
+  LiveVillainRangeRead,
   SeatId,
 } from '../../../types/liveSession';
 import type { Card } from '../../../types/poker';
@@ -29,6 +30,7 @@ import { LiveSessionStats } from './LiveSessionStats';
 import { LiveHandAdvisor } from './LiveHandAdvisor';
 import { SeatPlayerPicker } from './SeatPlayerPicker';
 import { CardPicker } from '../CardPicker';
+import { HandRangeMatrix } from '../HandRangeMatrix';
 import { PlayingCard } from '../HandDisplay';
 import { ProfileRangeChart } from '../profiles/ProfileRangeChart';
 import {
@@ -159,6 +161,15 @@ function formatNumber(value: number): string {
   return formatLiveNumber(value);
 }
 
+function formatPercent(value: number): string {
+  return `${formatNumber(value)}%`;
+}
+
+function formatOddsRatio(rewardBB: number, riskBB: number): string {
+  if (riskBB <= 0) return 'Free';
+  return `${formatNumber(rewardBB / riskBB)}:1`;
+}
+
 function toNumber(raw: string): number {
   const value = Number(raw);
   return Number.isFinite(value) ? value : 0;
@@ -232,8 +243,13 @@ export function LiveSessionActive({
   const [editingShownSeatId, setEditingShownSeatId] = useState<SeatId | null>(null);
   const [editingShownCards, setEditingShownCards] = useState<Card[]>([]);
   const [heroDecisionSnapshot, setHeroDecisionSnapshot] = useState<LiveHandDecisionSnapshot | null>(null);
+  const [villainRangeReads, setVillainRangeReads] = useState<LiveVillainRangeRead[]>([]);
+  const [activeRangeSeatId, setActiveRangeSeatId] = useState<SeatId | null>(null);
   const [activeTabLocal, setActiveTabLocal] = useState<LiveSessionActiveTab>(session.uiPreferences?.activeTab ?? 'live');
   const [cardPickerModeLocal, setCardPickerModeLocal] = useState<LiveCardPickerMode | undefined>(session.uiPreferences?.cardPickerMode);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(session.name ?? '');
+  const skipTitleBlurSave = useRef(false);
 
   const nextHandIndex = session.hands.length;
   const currentBlindLevel = getActiveBlindLevelForHand(session, nextHandIndex);
@@ -306,7 +322,6 @@ export function LiveSessionActive({
         profile: heroProfile,
       })
     : null;
-
   const isEnded = session.endedAt !== null;
   const activePause = [...(session.pauses ?? [])].reverse().find(pause => pause.endedAt === null) ?? null;
   const isPaused = !isEnded && activePause !== null;
@@ -332,6 +347,10 @@ export function LiveSessionActive({
     return Array.from(byKey.values());
   }, [boardCards, heroCards, shownCards, shownHands, winningCards]);
 
+  useEffect(() => {
+    if (!isEditingTitle) setTitleDraft(session.name ?? '');
+  }, [isEditingTitle, session.name]);
+
   const saveUiPreferences = (updates: NonNullable<LiveSession['uiPreferences']>) => {
     onSave({
       ...session,
@@ -350,6 +369,39 @@ export function LiveSessionActive({
   const setCardPickerMode = (mode: LiveCardPickerMode) => {
     setCardPickerModeLocal(mode);
     saveUiPreferences({ cardPickerMode: mode });
+  };
+
+  const beginTitleEdit = () => {
+    skipTitleBlurSave.current = false;
+    setTitleDraft(session.name ?? '');
+    setIsEditingTitle(true);
+  };
+
+  const saveTitleEdit = () => {
+    skipTitleBlurSave.current = true;
+    const trimmedTitle = titleDraft.trim();
+    const nextName = trimmedTitle || undefined;
+    if ((session.name ?? undefined) !== nextName) {
+      onSave({
+        ...session,
+        name: nextName,
+      });
+    }
+    setIsEditingTitle(false);
+  };
+
+  const cancelTitleEdit = () => {
+    skipTitleBlurSave.current = true;
+    setTitleDraft(session.name ?? '');
+    setIsEditingTitle(false);
+  };
+
+  const handleTitleEditBlur = () => {
+    if (skipTitleBlurSave.current) {
+      skipTitleBlurSave.current = false;
+      return;
+    }
+    saveTitleEdit();
   };
 
   const handleHeroCardsChange = (cards: Card[]) => {
@@ -547,6 +599,23 @@ export function LiveSessionActive({
     ? null
     : actionSummary(currentHandActions, currentStreet, effectiveActionSeatId);
   const actionSeatStack = effectiveActionSeatId === null ? null : currentStackBySeat.get(effectiveActionSeatId) ?? null;
+  const foldedSeatIds = useMemo(
+    () => new Set(currentHandActions.filter(action => action.action === 'fold').map(action => action.seatId)),
+    [currentHandActions],
+  );
+  const rangeCandidateSeats = useMemo(() => (
+    occupiedNow.filter(seatId => seatId !== heroSeatId && !foldedSeatIds.has(seatId))
+  ), [foldedSeatIds, heroSeatId, occupiedNow]);
+  const effectiveRangeSeatId = activeRangeSeatId !== null && rangeCandidateSeats.includes(activeRangeSeatId)
+    ? activeRangeSeatId
+    : rangeCandidateSeats[0] ?? null;
+  const effectiveRangeRead = effectiveRangeSeatId === null
+    ? null
+    : villainRangeReads.find(read => read.seatId === effectiveRangeSeatId) ?? null;
+  const effectiveRangeSelection = useMemo(
+    () => new Set(effectiveRangeRead?.hands ?? []),
+    [effectiveRangeRead],
+  );
 
   const resetOutcomeModal = () => {
     setOutcomeSeatId(null);
@@ -567,6 +636,8 @@ export function LiveSessionActive({
     setHeroCardPromptOpen(true);
     setShowLiveAdviceChart(false);
     setHeroDecisionSnapshot(null);
+    setVillainRangeReads([]);
+    setActiveRangeSeatId(null);
     setCurrentStreet('preflop');
     setHandActions([]);
     setActionSeatId(null);
@@ -585,6 +656,45 @@ export function LiveSessionActive({
       .reduce((sum, action) => sum + (action.amountBB ?? 0), 0);
     return Math.max(0, snapshot.startingStackBB - committed);
   };
+
+  const upsertVillainRangeRead = (seatId: SeatId, updates: { hands?: string[]; note?: string }) => {
+    const existing = villainRangeReads.find(read => read.seatId === seatId);
+    const nextHands = updates.hands ?? existing?.hands ?? [];
+    const nextNote = updates.note ?? existing?.note ?? '';
+    const profileId = playerIdBySeat.get(seatId);
+    const position = positions.get(seatId);
+    const nextRead: LiveVillainRangeRead = {
+      seatId,
+      ...(profileId ? { playerProfileId: profileId } : {}),
+      ...(position ? { position } : {}),
+      street: currentStreet,
+      hands: nextHands,
+      ...(nextNote.trim() ? { note: nextNote.trim() } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+
+    setVillainRangeReads(prev => {
+      const others = prev.filter(read => read.seatId !== seatId);
+      if (nextRead.hands.length === 0 && !nextRead.note) return others;
+      return [...others, nextRead].sort((a, b) => a.seatId - b.seatId);
+    });
+  };
+
+  const handleVillainRangeChange = (seatId: SeatId, selected: Set<string>) => {
+    upsertVillainRangeRead(seatId, { hands: [...selected].sort() });
+  };
+
+  const handleVillainRangeNoteChange = (seatId: SeatId, note: string) => {
+    upsertVillainRangeRead(seatId, { note });
+  };
+
+  const clearVillainRangeRead = (seatId: SeatId) => {
+    setVillainRangeReads(prev => prev.filter(read => read.seatId !== seatId));
+  };
+
+  const savedVillainRangeReads = (): LiveVillainRangeRead[] => (
+    villainRangeReads.filter(read => read.hands.length > 0 || read.note?.trim())
+  );
 
   const minRaiseAmountBB = (seatId: SeatId): number => {
     const summary = actionSummary(currentHandActions, currentStreet, seatId);
@@ -663,6 +773,7 @@ export function LiveSessionActive({
     const board = currentBoard();
     const finalPotBB = totalPotBB(actions);
     const knownWinningCards = knownHeroWinningCardsForSeat(seatId);
+    const villainRanges = savedVillainRangeReads();
     const hand: LiveHand = {
       index: nextHandIndex,
       startedAt: startedAtForCurrentHand(),
@@ -679,6 +790,7 @@ export function LiveSessionActive({
       ...(handNote.trim() ? { notes: handNote.trim() } : {}),
       ...(board ? { board } : {}),
       winningCards: knownWinningCards,
+      ...(villainRanges.length > 0 ? { villainRanges } : {}),
       finalPotBB,
       ...(selectedStraddle ? { straddle: selectedStraddle } : {}),
       ...(heroDecisionForActions(actions) ? { heroDecision: heroDecisionForActions(actions) } : {}),
@@ -836,6 +948,7 @@ export function LiveSessionActive({
     if (occupiedNow.length < 2) return;
     const now = new Date().toISOString();
     const actions = currentHandActions;
+    const villainRanges = savedVillainRangeReads();
     const hand: LiveHand = {
       index: nextHandIndex,
       startedAt: startedAtForCurrentHand(),
@@ -849,6 +962,7 @@ export function LiveSessionActive({
       actions,
       stackSnapshots: completeStackSnapshots([], actions, totalPotBB(actions)),
       ...(handNote.trim() ? { notes: handNote.trim() } : {}),
+      ...(villainRanges.length > 0 ? { villainRanges } : {}),
       ...(selectedStraddle ? { straddle: selectedStraddle } : {}),
     };
     onSave({ ...session, nextButtonSeat: undefined, hands: [...session.hands, hand] });
@@ -866,6 +980,7 @@ export function LiveSessionActive({
     const board = currentBoard();
     const actions = currentHandActions;
     const finalPotBB = selectedFinalPot?.finalPotBB ?? totalPotBB(actions);
+    const villainRanges = savedVillainRangeReads();
     const hand: LiveHand = {
       index: nextHandIndex,
       startedAt: startedAtForCurrentHand(),
@@ -882,6 +997,7 @@ export function LiveSessionActive({
       stackSnapshots: completeStackSnapshots(chopSeatIds, actions, finalPotBB),
       ...(handNote.trim() ? { notes: handNote.trim() } : {}),
       ...(board ? { board } : {}),
+      ...(villainRanges.length > 0 ? { villainRanges } : {}),
       ...(selectedFinalPot ? selectedFinalPot : { finalPotBB }),
       ...(selectedStraddle ? { straddle: selectedStraddle } : {}),
       ...(selectedBetSizing ? { betSizing: selectedBetSizing, potBB: selectedBetSizing.potBB, bets: [{ seatId: selectedBetSizing.seatId, betBB: selectedBetSizing.amountBB }] } : {}),
@@ -914,6 +1030,7 @@ export function LiveSessionActive({
     const board = currentBoard();
     const actions = currentHandActions;
     const finalPotBB = pendingWinner.finalPotBB ?? totalPotBB(actions);
+    const villainRanges = savedVillainRangeReads();
     const hand: LiveHand = {
       index: nextHandIndex,
       startedAt: pendingWinner.startedAt,
@@ -930,6 +1047,7 @@ export function LiveSessionActive({
       ...(handNote.trim() ? { notes: handNote.trim() } : {}),
       ...(board ? { board } : {}),
       winningCards: exposed,
+      ...(villainRanges.length > 0 ? { villainRanges } : {}),
       ...(pendingWinner.finalPotBB ? { finalPotBB: pendingWinner.finalPotBB, finalPotAmount: pendingWinner.finalPotAmount } : { finalPotBB }),
       ...(pendingWinner.straddle ? { straddle: pendingWinner.straddle } : {}),
       ...(pendingWinner.betSizing ? { betSizing: pendingWinner.betSizing, potBB: pendingWinner.betSizing.potBB, bets: [{ seatId: pendingWinner.seatId, betBB: pendingWinner.betSizing.amountBB }] } : {}),
@@ -1179,6 +1297,46 @@ export function LiveSessionActive({
   const actionActorName = effectiveActionSeatId === null ? 'Action closed' : playerNames[effectiveActionSeatId] ?? `Seat ${effectiveActionSeatId + 1}`;
   const hasUserActions = currentHandActions.some(action => action.action !== 'post-blind' && action.action !== 'post-straddle');
   const actionBarDisabled = isEnded || isPaused || effectiveActionSeatId === null || !activeActionSummary;
+  const actionOdds = activeActionSummary && effectiveActionSeatId !== null ? (() => {
+    const callBB = activeActionSummary.toCallBB;
+    const potBB = activeActionSummary.potBB;
+    const actorRemainingBB = remainingStackBBForSeat(effectiveActionSeatId)
+      ?? actionSeatStack?.startingStackBB
+      ?? 0;
+    const actorRemainingAfterCallBB = Math.max(0, actorRemainingBB - callBB);
+    const liveOpponentRemainingBB = occupiedNow
+      .filter(seatId => seatId !== effectiveActionSeatId)
+      .filter(seatId => !currentHandActions.some(action => action.seatId === seatId && action.action === 'fold'))
+      .map(seatId => remainingStackBBForSeat(seatId) ?? currentStackBySeat.get(seatId)?.startingStackBB ?? 0);
+    const biggestOpponentRemainingBB = Math.max(0, ...liveOpponentRemainingBB);
+    const impliedFutureBB = callBB > 0
+      ? Math.min(actorRemainingAfterCallBB, biggestOpponentRemainingBB)
+      : 0;
+    const potDenominatorBB = potBB + callBB;
+    const impliedDenominatorBB = potDenominatorBB + impliedFutureBB;
+    const potRequiredEquityPct = callBB > 0 && potDenominatorBB > 0
+      ? (callBB / potDenominatorBB) * 100
+      : 0;
+    const impliedRequiredEquityPct = callBB > 0 && impliedDenominatorBB > 0
+      ? (callBB / impliedDenominatorBB) * 100
+      : 0;
+    const stackLabel = actionSeatStack
+      ? `${stackDepthLabel(actionSeatStack.startingStackBB)} · ${formatNumber(actorRemainingBB)}BB left`
+      : `${formatNumber(actorRemainingBB)}BB left`;
+
+    return {
+      callBB,
+      potBB,
+      actorRemainingAfterCallBB,
+      biggestOpponentRemainingBB,
+      impliedFutureBB,
+      potRequiredEquityPct,
+      impliedRequiredEquityPct,
+      potOddsRatio: formatOddsRatio(potBB, callBB),
+      impliedOddsRatio: formatOddsRatio(potBB + impliedFutureBB, callBB),
+      stackLabel,
+    };
+  })() : null;
   const actionBar = !isEnded && (
     <section className="live-sticky-action-bar" aria-label="Live action controls">
       <div className="live-sticky-action-main">
@@ -1187,9 +1345,45 @@ export function LiveSessionActive({
           <h3>{actionActorName}</h3>
         </div>
         <div className="live-action-panel-meta">
-          {activeActionSummary && <span>Pot {formatNumber(activeActionSummary.potBB)}BB</span>}
-          {activeActionSummary && <span>To call {formatNumber(activeActionSummary.toCallBB)}BB</span>}
-          {effectiveActionSeatId !== null && actionSeatStack && <span>{stackDepthLabel(actionSeatStack.startingStackBB)} · {formatNumber(remainingStackBBForSeat(effectiveActionSeatId) ?? actionSeatStack.startingStackBB)}BB</span>}
+          {actionOdds && (
+            <button type="button" className="live-action-odds-chip" aria-label={`Pot odds ${actionOdds.callBB > 0 ? actionOdds.potOddsRatio : 'free check'}`}>
+              <span className="live-action-odds-label">Pot odds</span>
+              <strong>{actionOdds.callBB > 0 ? actionOdds.potOddsRatio : 'Free'}</strong>
+              <span className="live-action-odds-tooltip" role="tooltip">
+                <span className="live-action-odds-title">Pot odds</span>
+                {actionOdds.callBB > 0 ? (
+                  <>
+                    <span>Current price = {formatNumber(actionOdds.potBB)}BB pot : {formatNumber(actionOdds.callBB)}BB call = {actionOdds.potOddsRatio}.</span>
+                    <span>Required equity = {formatNumber(actionOdds.callBB)} / ({formatNumber(actionOdds.potBB)} + {formatNumber(actionOdds.callBB)}) = {formatPercent(actionOdds.potRequiredEquityPct)}</span>
+                  </>
+                ) : (
+                  <span>No call required. Checking is free.</span>
+                )}
+                <span className="live-action-odds-divider" />
+                <span>{actionOdds.stackLabel}</span>
+              </span>
+            </button>
+          )}
+          {actionOdds && (
+            <button type="button" className="live-action-odds-chip" aria-label={`Implied odds ${actionOdds.callBB > 0 ? actionOdds.impliedOddsRatio : 'not available'}`}>
+              <span className="live-action-odds-label">Implied odds</span>
+              <strong>{actionOdds.callBB > 0 ? actionOdds.impliedOddsRatio : 'N/A'}</strong>
+              <span className="live-action-odds-tooltip" role="tooltip">
+                <span className="live-action-odds-title">Max implied odds</span>
+                {actionOdds.callBB > 0 ? (
+                  <>
+                    <span>Max future win = min({formatNumber(actionOdds.actorRemainingAfterCallBB)}BB after call, {formatNumber(actionOdds.biggestOpponentRemainingBB)}BB deepest opponent) = {formatNumber(actionOdds.impliedFutureBB)}BB.</span>
+                    <span>Max implied price = ({formatNumber(actionOdds.potBB)}BB pot + {formatNumber(actionOdds.impliedFutureBB)}BB future) : {formatNumber(actionOdds.callBB)}BB call = {actionOdds.impliedOddsRatio}.</span>
+                    <span>Required equity at that max = {formatNumber(actionOdds.callBB)} / ({formatNumber(actionOdds.potBB)} + {formatNumber(actionOdds.callBB)} + {formatNumber(actionOdds.impliedFutureBB)}) = {formatPercent(actionOdds.impliedRequiredEquityPct)}</span>
+                  </>
+                ) : (
+                  <span>No call is at risk yet, so implied odds do not apply.</span>
+                )}
+                <span className="live-action-odds-divider" />
+                <span>Pot {formatNumber(actionOdds.potBB)}BB · To call {formatNumber(actionOdds.callBB)}BB · {actionOdds.stackLabel}</span>
+              </span>
+            </button>
+          )}
         </div>
       </div>
       <div className="live-sticky-action-buttons">
@@ -1210,6 +1404,15 @@ export function LiveSessionActive({
       </div>
     </section>
   );
+  const pausedTimerWarning = isPaused && !isEnded ? (
+    <div className="live-paused-warning" role="alert">
+      <div>
+        <strong>Timer paused</strong>
+        <span>Entries will save, but elapsed time is currently stopped.</span>
+      </div>
+      <button type="button" className="btn-primary" onClick={togglePause}>Resume timer</button>
+    </div>
+  ) : null;
 
   const betSizingSheet = betSheetOpen && effectiveActionSeatId !== null && activeActionSummary && (
     <div className="live-bottom-sheet-backdrop" role="presentation" onClick={() => setBetSheetOpen(false)}>
@@ -1221,6 +1424,7 @@ export function LiveSessionActive({
           </div>
           <button type="button" className="live-card-modal-close" onClick={() => setBetSheetOpen(false)}>×</button>
         </div>
+        {pausedTimerWarning}
         <div className="hl-po-chips">
           {(currentStreet === 'preflop' ? PREFLOP_ACTION_PRESETS : POSTFLOP_ACTION_PRESETS).map(preset => (
             <button
@@ -1269,7 +1473,6 @@ export function LiveSessionActive({
         <span className="live-active-ended-tag">Blinds {currentBlindLevel.currency ?? '$'}{formatNumber(currentBlindLevel.smallBlind)}/{formatNumber(currentBlindLevel.bigBlind)}</span>
         {selectedStraddle && <span className="live-active-ended-tag">Straddle {formatNumber(selectedStraddle.amountBB)}BB</span>}
         {isPaused && <span className="live-active-ended-tag live-active-paused-tag">Paused</span>}
-        {!isEnded && <button type="button" className={`btn-secondary ${isPaused ? 'active' : ''}`} onClick={togglePause}>{isPaused ? 'Resume timer' : 'Pause timer'}</button>}
       </div>
       <PokerTable
         tableSize={session.tableSize}
@@ -1302,6 +1505,68 @@ export function LiveSessionActive({
           onRequestAdvice={() => setShowLiveAdviceChart(value => !value)}
           onSnapshotChange={handleAdvisorSnapshotChange}
         />
+      )}
+      {!isEnded && rangeCandidateSeats.length > 0 && (
+        <section className="live-range-reader" aria-label="Villain range reader">
+          <div className="live-range-reader-head">
+            <div>
+              <div className="live-card-modal-kicker">Range read</div>
+              <h3 className="live-range-reader-title">Put villain on a range</h3>
+            </div>
+            {villainRangeReads.length > 0 && (
+              <span className="live-active-ended-tag">
+                {villainRangeReads.length} saved read{villainRangeReads.length === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
+          <div className="live-range-seat-row" role="tablist" aria-label="Villain seats">
+            {rangeCandidateSeats.map(seatId => {
+              const read = villainRangeReads.find(item => item.seatId === seatId);
+              return (
+                <button
+                  key={seatId}
+                  type="button"
+                  className={`live-range-seat-btn ${effectiveRangeSeatId === seatId ? 'active' : ''}`}
+                  onClick={() => setActiveRangeSeatId(seatId)}
+                >
+                  <span>{playerNames[seatId] ?? `Seat ${seatId + 1}`}</span>
+                  <small>{positions.get(seatId) ?? `Seat ${seatId + 1}`}{read ? ` · ${read.hands.length} hands` : ''}</small>
+                </button>
+              );
+            })}
+          </div>
+          {effectiveRangeSeatId !== null && (
+            <div className="live-range-reader-body">
+              <HandRangeMatrix
+                selected={effectiveRangeSelection}
+                onChange={(next) => handleVillainRangeChange(effectiveRangeSeatId, next)}
+                disabled={pendingWinner !== null || outcomeSeatId !== null}
+              />
+              <div className="live-range-reader-footer">
+                <label className="hl-sit-field live-range-note">
+                  <span className="hl-label">Read note</span>
+                  <input
+                    className="hl-num-input"
+                    value={effectiveRangeRead?.note ?? ''}
+                    onChange={event => handleVillainRangeNoteChange(effectiveRangeSeatId, event.target.value)}
+                    placeholder="Line, timing, sizing, live tell..."
+                    disabled={pendingWinner !== null || outcomeSeatId !== null}
+                  />
+                </label>
+                {(effectiveRangeRead?.hands.length || effectiveRangeRead?.note) && (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => clearVillainRangeRead(effectiveRangeSeatId)}
+                    disabled={pendingWinner !== null || outcomeSeatId !== null}
+                  >
+                    Clear read
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </section>
       )}
       {actionBar}
       <LiveHandHistory
@@ -1341,6 +1606,8 @@ export function LiveSessionActive({
         session={session}
         profiles={profiles}
         liveTicker={!isEnded && !isPaused}
+        isPaused={isPaused}
+        onTogglePause={!isEnded ? togglePause : undefined}
       />
     </div>
   );
@@ -1428,7 +1695,38 @@ export function LiveSessionActive({
       <div className="live-active-header">
         <button className="back-btn" onClick={onExit}>← Live Sessions</button>
         <div className="live-active-title-block">
-          <h1 className="live-active-title">{session.name ?? 'Live session'}</h1>
+          <h1 className="live-active-title">
+            {isEditingTitle ? (
+              <input
+                className="live-title-edit-input"
+                value={titleDraft}
+                autoFocus
+                placeholder="Untitled session"
+                aria-label="Session title"
+                onBlur={handleTitleEditBlur}
+                onChange={e => setTitleDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveTitleEdit();
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelTitleEdit();
+                  }
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="live-title-edit-button"
+                onClick={beginTitleEdit}
+                title="Edit session title"
+              >
+                {session.name?.trim() || 'Untitled session'}
+              </button>
+            )}
+          </h1>
           {isEnded && <span className="live-active-ended-tag">Ended</span>}
         </div>
       </div>
@@ -1451,6 +1749,7 @@ export function LiveSessionActive({
               <div><div className="live-card-modal-kicker">Effective hand {nextHandIndex + 1}</div><h2 className="live-card-modal-title">Change blinds</h2></div>
               <button type="button" className="live-card-modal-close" onClick={() => setShowBlindChange(false)}>×</button>
             </div>
+            {pausedTimerWarning}
             <div className="hl-po-custom-row">
               <label className="hl-sit-field"><span className="hl-label">Money symbol</span><input className="hl-num-input" value={currencyRaw} placeholder="$" title="Symbol shown before money amounts, like $ or €" onChange={e => setCurrencyRaw(e.target.value)} /></label>
               <label className="hl-sit-field"><span className="hl-label">Small blind</span><input type="number" min={0} step={0.5} className="hl-num-input" value={smallBlindRaw} onChange={e => setSmallBlindRaw(e.target.value)} /></label>
@@ -1484,6 +1783,7 @@ export function LiveSessionActive({
               </div>
               <button type="button" className="live-card-modal-close" onClick={closeWinningCardsEditor}>×</button>
             </div>
+            {pausedTimerWarning}
             <CardPicker
               value={editingWinnerCards}
               onChange={handleWinningCardsEditChange}
@@ -1510,6 +1810,7 @@ export function LiveSessionActive({
               </div>
               <button type="button" className="live-card-modal-close" onClick={closeShownHandsEditor}>×</button>
             </div>
+            {pausedTimerWarning}
             <div className="live-card-player-select">
               {editingShownCandidates.map(seatId => (
                 <button
@@ -1541,7 +1842,7 @@ export function LiveSessionActive({
         </div>
       )}
 
-      {heroCardPromptOpen && !isEnded && !isPaused && outcomeSeatId === null && pendingWinner === null && boardSelection === null && occupiedNow.length >= 2 && heroSeatId !== null && (
+      {heroCardPromptOpen && !isEnded && outcomeSeatId === null && pendingWinner === null && boardSelection === null && occupiedNow.length >= 2 && heroSeatId !== null && (
         <div className="live-card-modal-backdrop" role="presentation">
           <div className="live-card-modal" role="dialog" aria-modal="true" aria-labelledby="hero-card-title">
             <div className="live-card-modal-header">
@@ -1551,6 +1852,7 @@ export function LiveSessionActive({
               </div>
               <button type="button" className="live-card-modal-close" onClick={() => setHeroCardPromptOpen(false)}>×</button>
             </div>
+            {pausedTimerWarning}
             <CardPicker
               value={heroCards}
               onChange={handleHeroCardsChange}
@@ -1572,6 +1874,7 @@ export function LiveSessionActive({
         <div className="live-card-modal-backdrop" role="presentation">
           <div className="live-card-modal" role="dialog" aria-modal="true" aria-labelledby="hand-outcome-title">
             <div className="live-card-modal-header"><div><div className="live-card-modal-kicker">Hand outcome</div><h2 id="hand-outcome-title" className="live-card-modal-title">{playerNames[outcomeSeatId] ?? `Seat ${outcomeSeatId + 1}`}</h2></div><button type="button" className="live-card-modal-close" onClick={resetOutcomeModal}>×</button></div>
+            {pausedTimerWarning}
             <div className="live-outcome-bet-panel">
               <div className="card-picker-label">Final pot</div>
               <div className="hl-po-custom-row">
@@ -1609,6 +1912,7 @@ export function LiveSessionActive({
           <div className={`live-card-modal ${shownPickerOpen ? 'live-card-modal-stacked' : ''}`} role="dialog" aria-modal="true" aria-labelledby="winning-hand-title">
             <div className="live-card-modal-base" aria-hidden={shownPickerOpen}>
               <div className="live-card-modal-header"><div><div className="live-card-modal-kicker">Winning hand</div><h2 id="winning-hand-title" className="live-card-modal-title">{playerNames[pendingWinner.seatId] ?? `Seat ${pendingWinner.seatId + 1}`}</h2></div><button type="button" className="live-card-modal-close" onClick={cancelWinningCards}>×</button></div>
+              {pausedTimerWarning}
               <CardPicker value={winningCards} onChange={handleWinningCardsChange} maxCards={2} label="Winner cards" mode={cardPickerMode} onModeChange={setCardPickerMode} unavailableCards={knownCards} />
               {shownHands.length > 0 && <div className="live-card-shown-list">{shownHands.map(hand => <div key={hand.seatId} className="live-card-shown-row"><button type="button" className="live-card-shown-main" onClick={() => startShownPlayerHand(hand.seatId)}><span className="live-card-shown-name">{playerNames[hand.seatId] ?? `Seat ${hand.seatId + 1}`}<small>Shown</small></span><strong>{hand.cards.map(card => `${card.rank}${card.suit.toUpperCase()}`).join(' ')}</strong></button><button type="button" className="live-card-shown-remove" onClick={() => setShownHands(prev => prev.filter(item => item.seatId !== hand.seatId))}>×</button></div>)}</div>}
               <div className="live-card-modal-actions"><button type="button" className="btn-secondary" onClick={() => startShownPlayerHand()}>+ Player</button><button type="button" className="btn-secondary" onClick={() => savePendingHand('no-show')}>No show</button><button type="button" className="btn-primary" disabled={winningCards.length < 1} onClick={() => savePendingHand(winningCards)}>Save hand</button></div>
@@ -1616,6 +1920,7 @@ export function LiveSessionActive({
             {shownPickerOpen && (
               <div className="live-card-player-submodal" role="dialog" aria-modal="true" aria-label="Shown losing player hand">
                 <div className="live-card-modal-header"><div><div className="live-card-modal-kicker">Shown losing hand</div><h3 className="live-card-modal-title">{shownSeatId === null ? 'Select player' : playerNames[shownSeatId] ?? `Seat ${shownSeatId + 1}`}</h3></div><button type="button" className="live-card-modal-close" onClick={closeShownPlayerPicker}>×</button></div>
+                {pausedTimerWarning}
                 <div className="live-card-player-select">{shownPlayerCandidates.map(seatId => <button key={seatId} type="button" className={`live-card-player-btn ${shownSeatId === seatId ? 'active' : ''}`} onClick={() => startShownPlayerHand(seatId)}><span>{playerNames[seatId] ?? `Seat ${seatId + 1}`}</span>{shownHands.some(hand => hand.seatId === seatId) && <small>Shown</small>}</button>)}</div>
                 {shownSeatId !== null && <CardPicker value={shownCards} onChange={handleShownCardsChange} maxCards={2} label={`${playerNames[shownSeatId] ?? `Seat ${shownSeatId + 1}`} cards`} mode={cardPickerMode} onModeChange={setCardPickerMode} unavailableCards={knownCards} />}
                 <div className="live-card-player-actions"><button type="button" className="btn-secondary" onClick={() => { if (shownSeatId !== null) setShownHands(prev => prev.filter(hand => hand.seatId !== shownSeatId)); setShownCards([]); }} disabled={shownSeatId === null}>Clear selected</button><button type="button" className="btn-primary" onClick={closeShownPlayerPicker}>Done</button></div>
@@ -1629,6 +1934,7 @@ export function LiveSessionActive({
         <div className="live-card-modal-backdrop" role="presentation">
           <div className="live-card-modal live-board-modal" role="dialog" aria-modal="true" aria-labelledby="board-card-title">
             <div className="live-card-modal-header"><div><div className="live-card-modal-kicker">Board card</div><h2 id="board-card-title" className="live-card-modal-title">{BOARD_SELECTION_LABELS[boardSelection]}</h2></div><button type="button" className="live-card-modal-close" onClick={() => { setBoardSelection(null); setBoardSlotCards([]); }}>×</button></div>
+            {pausedTimerWarning}
             <CardPicker value={boardSlotCards} onChange={handleBoardSlotCardsChange} maxCards={requiredBoardCardCount(boardSelection)} label={boardSelection === 'flop' ? 'Flop cards' : 'Board card'} mode={cardPickerMode} onModeChange={setCardPickerMode} unavailableCards={knownCards} />
             <div className="live-card-modal-actions"><button type="button" className="btn-secondary" onClick={() => { setBoardSlotCards([]); setBoardCards(prev => { const next = [...prev] as BoardCards; if (boardSelection === 'flop') { next[0] = null; next[1] = null; next[2] = null; } else { next[boardSelection === 'turn' ? 3 : 4] = null; } return next; }); setBoardSelection(null); }}>Clear</button><button type="button" className="btn-primary" onClick={() => saveBoardSelection()}>Save {boardSelection === 'flop' ? 'flop' : 'card'}</button></div>
           </div>

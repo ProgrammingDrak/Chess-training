@@ -16,6 +16,7 @@ import { PracticeBoard } from './components/PracticeBoard';
 import { ChallengeBoard } from './components/ChallengeBoard';
 import { Dashboard } from './components/Dashboard';
 import { PokerHome } from './components/poker/PokerHome';
+import { PokerDrillsHome } from './components/poker/PokerDrillsHome';
 import { PokerDrillRouter } from './components/poker/PokerDrillRouter';
 import { PokerDashboard } from './components/poker/PokerDashboard';
 import { ProfilesHome } from './components/poker/profiles/ProfilesHome';
@@ -31,7 +32,7 @@ import { FEATURE_TIERS, POKER_DRILL_TIERS } from './data/featureTiers';
 import { canAccessTier, getTierLabel } from './types/tiers';
 
 const CHESS_VIEWS: AppView[] = ['chess_home', 'opening_detail', 'practice', 'challenge', 'dashboard'];
-const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup', 'poker_live_home', 'poker_live_active'];
+const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drills', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup', 'poker_live_home', 'poker_live_active'];
 const BLACKJACK_VIEWS: AppView[] = ['blackjack_home', 'blackjack_drill', 'blackjack_dashboard'];
 
 const POKER_DRILL_NAMES: Record<PokerDrillType, string> = {
@@ -229,6 +230,12 @@ function AppInner() {
                 ♠ Poker GTO
               </button>
               <button
+                className={`nav-link ${view === 'poker_drills' || view === 'poker_drill' ? 'active' : ''}`}
+                onClick={() => setView('poker_drills')}
+              >
+                Drills
+              </button>
+              <button
                 className={`nav-link ${view === 'poker_profiles' ? 'active' : ''}`}
                 onClick={() => requireTier(FEATURE_TIERS.pokerProfiles, 'Player Profiles', () => setView('poker_profiles'))}
               >
@@ -340,10 +347,8 @@ function AppInner() {
         {/* ── Poker views ── */}
         {view === 'poker_home' && (
           <PokerHome
-            pokerProgress={pokerProgress}
-            getDrillStats={getDrillStats}
-            onSelectDrill={handleSelectPokerDrill}
             onViewDashboard={() => setView('poker_dashboard')}
+            onViewDrills={() => setView('poker_drills')}
             onViewProfiles={() => requireTier(FEATURE_TIERS.pokerProfiles, 'Player Profiles', () => setView('poker_profiles'))}
             onViewHandLookup={() => requireTier(FEATURE_TIERS.pokerHandLookup, 'What Should I Do?', () => setView('poker_hand_lookup'))}
             onViewLiveSession={() => requireTier(FEATURE_TIERS.pokerLiveSession, 'Live Session Tracker', () => setView('poker_live_home'))}
@@ -351,11 +356,19 @@ function AppInner() {
           />
         )}
 
+        {view === 'poker_drills' && (
+          <PokerDrillsHome
+            getDrillStats={getDrillStats}
+            onSelectDrill={handleSelectPokerDrill}
+            onBack={() => setView('poker_home')}
+          />
+        )}
+
         {view === 'poker_drill' && pokerDrillType && (
           <PokerDrillRouter
             drillType={pokerDrillType}
             onRecordAttempt={recordPokerAttempt}
-            onBack={() => setView('poker_home')}
+            onBack={() => setView('poker_drills')}
           />
         )}
 

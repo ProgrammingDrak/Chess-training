@@ -1,22 +1,25 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { RANKS, cellHand } from '../../utils/handMatrix';
-import {
-  HAND_RANK_MAP,
-  buildRangeFromPercentile,
-  getGtoChartEntry,
-  suggestedVpip,
-  getPositionsForTableSize,
-} from '../../data/poker/profileTemplates';
-import { actionBucketFor, actionLabel, defaultActionBuckets, ensureActionBuckets } from '../../utils/profileActionBuckets';
-import type { PlayerProfile, RangeAction } from '../../types/profiles';
-import { DEFAULT_ACTION_CONTEXT } from '../../types/profiles';
-
-// ─── Hand text parser ─────────────────────────────────────────────────────────
-//
-// Accepts:  JJ  AKs  AKo  AK  72o  T9s  (case-insensitive, "10" → "T")
-// Returns:  canonical hand key  or  null if invalid
+import { HAND_RANK_MAP } from '../../data/poker/profileTemplates';
+import { cardKey } from '../../utils/cardInput';
+import { analyzeHoldemScenario, handNotationFromCards, type HoldemOutDetail, type HoldemStreetStats } from '../../utils/holdemEquity';
+import { handLabel } from '../../utils/poker';
+import type { Card, Suit } from '../../types/poker';
+import { CardPicker } from './CardPicker';
+import { PlayingCard } from './HandDisplay';
 
 const RANK_SET = new Set(RANKS as unknown as string[]);
+const SUIT_ORDER: Suit[] = ['s', 'h', 'd', 'c'];
+type LookupTab = 'hero' | 'flop' | 'turn' | 'river';
+type ActiveLookupTab = LookupTab | 'board';
+
+const LOOKUP_TABS: Array<{ id: ActiveLookupTab; label: string; helper: string }> = [
+  { id: 'hero', label: 'Hero Hand', helper: 'Pick the exact two cards or type notation.' },
+  { id: 'board', label: 'Full Board', helper: 'Enter flop, turn, and river in one pass.' },
+  { id: 'flop', label: 'Flop', helper: 'Add the three flop cards.' },
+  { id: 'turn', label: 'Turn', helper: 'Add the turn card.' },
+  { id: 'river', label: 'River', helper: 'Add the river card.' },
+];
 
 function parseHandInput(raw: string): string | null {
   const s = raw.trim().toUpperCase().replace(/10/g, 'T');
@@ -24,9 +27,7 @@ function parseHandInput(raw: string): string | null {
   const r1 = s[0], r2 = s[1];
   if (!RANK_SET.has(r1) || !RANK_SET.has(r2)) return null;
 
-  if (r1 === r2) {
-    return s.length === 2 ? `${r1}${r2}` : null; // pair only if exactly 2 chars
-  }
+  if (r1 === r2) return s.length === 2 ? `${r1}${r2}` : null;
 
   const suffix = s.length === 3 ? s[2] : null;
   if (suffix && suffix !== 'S' && suffix !== 'O') return null;
@@ -34,36 +35,84 @@ function parseHandInput(raw: string): string | null {
   const idx1 = RANKS.indexOf(r1 as typeof RANKS[number]);
   const idx2 = RANKS.indexOf(r2 as typeof RANKS[number]);
   const [highR, lowR] = idx1 < idx2 ? [r1, r2] : [r2, r1];
-  const suf = suffix ? suffix.toLowerCase() : 's'; // no suffix → default suited
+  const suf = suffix ? suffix.toLowerCase() : 's';
   const hand = `${highR}${lowR}${suf}`;
   return HAND_RANK_MAP[hand] !== undefined ? hand : null;
 }
-
-// ─── Detect mobile (touch-primary device) ────────────────────────────────────
 
 function defaultShowGrid(): boolean {
   if (typeof window === 'undefined') return false;
   return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 }
 
-// ─── HandPickerGrid ───────────────────────────────────────────────────────────
-// Interactive 13×13 grid — tap a cell to select that hand.
-// Cells are color-coded by the supplied range.
+function cardsForHandNotation(hand: string, unavailableCards: Card[] = []): Card[] | null {
+  const unavailable = new Set(unavailableCards.map(cardKey));
+  const r1 = hand[0] as Card['rank'];
+  const r2 = hand[1] as Card['rank'];
+
+  if (r1 === r2) {
+    for (let i = 0; i < SUIT_ORDER.length - 1; i++) {
+      for (let j = i + 1; j < SUIT_ORDER.length; j++) {
+        const cards = [{ rank: r1, suit: SUIT_ORDER[i] }, { rank: r2, suit: SUIT_ORDER[j] }];
+        if (cards.every(card => !unavailable.has(cardKey(card)))) return cards;
+      }
+    }
+    return null;
+  }
+
+  if (hand.endsWith('s')) {
+    for (const suit of SUIT_ORDER) {
+      const cards = [{ rank: r1, suit }, { rank: r2, suit }];
+      if (cards.every(card => !unavailable.has(cardKey(card)))) return cards;
+    }
+    return null;
+  }
+
+  for (const highSuit of SUIT_ORDER) {
+    for (const lowSuit of SUIT_ORDER) {
+      if (highSuit === lowSuit) continue;
+      const cards = [{ rank: r1, suit: highSuit }, { rank: r2, suit: lowSuit }];
+      if (cards.every(card => !unavailable.has(cardKey(card)))) return cards;
+    }
+  }
+  return null;
+}
+
+function formatPct(value: number | null): string {
+  return value === null ? '-' : `${value.toFixed(1)}%`;
+}
+
+function formatSamples(stats: HoldemStreetStats): string {
+  if (!stats.available || stats.samples === 0) return 'Pending';
+  return stats.exact ? `${stats.samples.toLocaleString()} exact combos` : `${stats.samples.toLocaleString()} sims`;
+}
+
+function groupOutDetails(outDetails: HoldemOutDetail[]): Array<{ key: string; label: string; note: string; handRank: number; cards: Card[] }> {
+  const groups = new Map<string, { key: string; label: string; note: string; handRank: number; cards: Card[] }>();
+  for (const detail of outDetails) {
+    const key = detail.improvesTo;
+    const group = groups.get(key) ?? {
+      key,
+      label: detail.improvesTo,
+      note: detail.note,
+      handRank: detail.handRank,
+      cards: [],
+    };
+    group.cards.push(detail.card);
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) => b.handRank - a.handRank || b.cards.length - a.cards.length);
+}
 
 function HandPickerGrid({
   selectedHand,
-  range,
-  buckets,
   onSelect,
 }: {
   selectedHand: string;
-  range: Record<string, RangeAction>;
-  buckets: ReturnType<typeof defaultActionBuckets>;
   onSelect: (hand: string) => void;
 }) {
   return (
     <div className="hlpg-wrapper">
-      {/* Column headers */}
       <div className="hlpg-col-headers">
         <div className="hlpg-corner" />
         {RANKS.map(r => <div key={r} className="hlpg-axis">{r}</div>)}
@@ -74,10 +123,8 @@ function HandPickerGrid({
           <div className="hlpg-axis">{rowRank}</div>
           {RANKS.map((_, col) => {
             const hand = cellHand(row, col);
-            const action = range[hand] ?? 'fold';
-            const cfg = actionBucketFor(action, buckets);
             const isSelected = hand === selectedHand;
-            const isPair   = row === col;
+            const isPair = row === col;
             const isSuited = col > row;
 
             return (
@@ -88,13 +135,8 @@ function HandPickerGrid({
                   isPair ? 'hlpg-pair' : isSuited ? 'hlpg-suited' : 'hlpg-offsuit',
                   isSelected ? 'hlpg-selected' : '',
                 ].join(' ')}
-                style={{
-                  background: cfg.bg,
-                  borderColor: isSelected ? '#ffffff' : cfg.border,
-                  color: cfg.text,
-                }}
                 onClick={() => onSelect(hand)}
-                title={`${hand}${isSuited ? ' (suited)' : isPair ? ' (pair)' : ' (offsuit)'}`}
+                title={`${hand}${isSuited ? ' suited' : isPair ? ' pair' : ' offsuit'}`}
               >
                 {hand}
               </button>
@@ -106,114 +148,67 @@ function HandPickerGrid({
   );
 }
 
-// ─── ResultPanel ──────────────────────────────────────────────────────────────
-
-function ResultPanel({
-  title, subtitle, action, note, buckets, mismatch,
-}: {
-  title: string; subtitle: string;
-  action: RangeAction | null; note: string;
-  buckets: ReturnType<typeof defaultActionBuckets>;
-  mismatch?: boolean;
-}) {
-  const cfg = action ? actionBucketFor(action, buckets) : null;
+function CardSlotStrip({ cards, slots }: { cards: Card[]; slots: number }) {
   return (
-    <div
-      className={`hl-result-panel${mismatch ? ' hl-mismatch' : ''}`}
-      style={cfg ? { borderColor: cfg.border } : {}}
-    >
-      <div className="hl-result-title">{title}</div>
-      <div className="hl-result-subtitle">{subtitle}</div>
-      {cfg && action ? (
-        <div className="hl-result-action" style={{ color: cfg.text, background: cfg.bg }}>
-          <span className="hl-result-emoji">{cfg.emoji}</span>
-          <span className="hl-result-label">{cfg.label}</span>
-        </div>
-      ) : (
-        <div className="hl-result-action hl-result-na">—</div>
-      )}
-      <div className="hl-result-note">{note}</div>
-      {mismatch && (
-        <div className="hl-mismatch-badge">⚠ Differs from GTO</div>
-      )}
+    <div className="hl-board-strip">
+      {Array.from({ length: slots }).map((_, index) => {
+        const card = cards[index];
+        return card ? (
+          <PlayingCard key={cardKey(card)} card={card} size="sm" />
+        ) : (
+          <div key={`empty-${index}`} className="hl-board-placeholder" />
+        );
+      })}
     </div>
   );
 }
-
-// ─── MiniGrid (display-only) ──────────────────────────────────────────────────
-
-function MiniGrid({
-  hand, range, buckets,
-}: {
-  hand: string; range: Record<string, RangeAction>;
-  buckets: ReturnType<typeof defaultActionBuckets>;
-}) {
-  return (
-    <div className="hl-mini-grid">
-      {RANKS.map((_, row) => (
-        <div key={row} className="hl-mini-row">
-          {RANKS.map((__, col) => {
-            const h = cellHand(row, col);
-            const action = range[h] ?? 'fold';
-            const cfg = actionBucketFor(action, buckets);
-            const isSelected = h === hand;
-            return (
-              <div
-                key={h}
-                className={`hl-mini-cell${isSelected ? ' hl-mini-selected' : ''}`}
-                style={{ background: cfg.bg, borderColor: isSelected ? '#ffffff' : cfg.border }}
-                title={h}
-              />
-            );
-          })}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─── Main component ───────────────────────────────────────────────────────────
 
 interface HandLookupProps {
-  profiles: PlayerProfile[];
+  profiles: unknown[];
   onBack: () => void;
 }
 
-export function HandLookup({ profiles, onBack }: HandLookupProps) {
-  // ── Hand input state ────────────────────────────────────────────────────────
+export function HandLookup({ onBack }: HandLookupProps) {
+  const [activeLookupTab, setActiveLookupTab] = useState<ActiveLookupTab | null>(null);
+  const [expandedOutsStreet, setExpandedOutsStreet] = useState<string | null>(null);
+  const [ruledOutOutGroups, setRuledOutOutGroups] = useState<Set<string>>(() => new Set());
+  const [heroCards, setHeroCards] = useState<Card[]>([{ rank: 'A', suit: 's' }, { rank: 'K', suit: 's' }]);
+  const [flopCards, setFlopCards] = useState<Card[]>([]);
+  const [turnCard, setTurnCard] = useState<Card[]>([]);
+  const [riverCard, setRiverCard] = useState<Card[]>([]);
   const [selectedHand, setSelectedHand] = useState<string>('AKs');
-  const [textInput, setTextInput]       = useState<string>('AKs');
-  const [textError, setTextError]       = useState(false);
-  const [showGrid, setShowGrid]         = useState(defaultShowGrid);
+  const [textInput, setTextInput] = useState<string>('AKs');
+  const [textError, setTextError] = useState(false);
+  const [showGrid, setShowGrid] = useState(defaultShowGrid);
 
-  // ── Situation state ─────────────────────────────────────────────────────────
-  const [tableSize, setTableSize]               = useState(6);
-  const [position, setPosition]                 = useState('BTN');
-  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
-  // Pot odds: preset fraction key (null = custom) + custom raw strings
-  const [potPreset, setPotPreset]               = useState<string | null>('1/2');
-  const [customPotRaw, setCustomPotRaw]         = useState('4.5');
-  const [customBetRaw, setCustomBetRaw]         = useState('3');
-  const [customPot, setCustomPot]               = useState(4.5);
-  const [customBet, setCustomBet]               = useState(3);
+  const boardCards = useMemo(() => [...flopCards, ...turnCard, ...riverCard], [flopCards, riverCard, turnCard]);
+  const heroNotation = handNotationFromCards(heroCards) ?? selectedHand;
+  const rank = HAND_RANK_MAP[heroNotation] ?? HAND_RANK_MAP[selectedHand] ?? null;
 
-  // ── Position helpers ────────────────────────────────────────────────────────
-  const positions = getPositionsForTableSize(tableSize);
-  const safePosition = positions.includes(position)
-    ? position
-    : (positions.find(p => p === 'BTN') ?? positions[0]);
+  useEffect(() => {
+    setRuledOutOutGroups(new Set());
+  }, [heroCards, boardCards]);
 
-  const handleTableSizeChange = (n: number) => {
-    setTableSize(n);
-    const pos = getPositionsForTableSize(n);
-    if (!pos.includes(position)) setPosition(pos.find(p => p === 'BTN') ?? pos[0]);
-  };
+  function handleHeroCardsChange(cards: Card[]) {
+    setHeroCards(cards);
+    const notation = handNotationFromCards(cards);
+    if (notation) {
+      setSelectedHand(notation);
+      setTextInput(notation);
+      setTextError(false);
+      setActiveLookupTab(null);
+    }
+  }
 
-  // ── Input handlers ──────────────────────────────────────────────────────────
   function selectFromGrid(hand: string) {
     setSelectedHand(hand);
     setTextInput(hand);
     setTextError(false);
+    const exactCards = cardsForHandNotation(hand, boardCards);
+    if (exactCards) {
+      setHeroCards(exactCards);
+      setActiveLookupTab(null);
+    }
   }
 
   function handleTextChange(value: string) {
@@ -222,6 +217,8 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
     if (parsed) {
       setSelectedHand(parsed);
       setTextError(false);
+      const exactCards = cardsForHandNotation(parsed, boardCards);
+      if (exactCards) setHeroCards(exactCards);
     } else if (value.trim() === '') {
       setTextError(false);
     } else {
@@ -229,358 +226,356 @@ export function HandLookup({ profiles, onBack }: HandLookupProps) {
     }
   }
 
-  // ── Derived ─────────────────────────────────────────────────────────────────
-  const rank = HAND_RANK_MAP[selectedHand] ?? null;
-  const exactGtoChart = getGtoChartEntry(tableSize, safePosition);
-  const vpip = exactGtoChart?.publishedPct ?? suggestedVpip(tableSize, safePosition);
+  function clearBoard() {
+    setFlopCards([]);
+    setTurnCard([]);
+    setRiverCard([]);
+    if (activeLookupTab && activeLookupTab !== 'hero') setActiveLookupTab(null);
+  }
 
-  const gtoRange = useMemo(
-    () => exactGtoChart?.range ?? buildRangeFromPercentile(vpip, 'call'),
-    [exactGtoChart, vpip],
+  function handleFlopCardsChange(cards: Card[]) {
+    setFlopCards(cards);
+    if (cards.length === 3) setActiveLookupTab(null);
+  }
+
+  function handleTurnCardChange(cards: Card[]) {
+    setTurnCard(cards);
+    if (cards.length === 1) setActiveLookupTab(null);
+  }
+
+  function handleRiverCardChange(cards: Card[]) {
+    setRiverCard(cards);
+    if (cards.length === 1) setActiveLookupTab(null);
+  }
+
+  function handleBoardCardsChange(cards: Card[]) {
+    setFlopCards(cards.slice(0, 3));
+    setTurnCard(cards.slice(3, 4));
+    setRiverCard(cards.slice(4, 5));
+    if (cards.length === 5) setActiveLookupTab(null);
+  }
+
+  function outGroupKey(street: string, groupKey: string): string {
+    return `${street}:${groupKey}`;
+  }
+
+  function toggleRuledOutGroup(street: string, groupKey: string) {
+    const key = outGroupKey(street, groupKey);
+    setRuledOutOutGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  const streetStats = useMemo(
+    () => analyzeHoldemScenario(heroCards, boardCards),
+    [boardCards, heroCards],
   );
-  const gtoBuckets = useMemo(() => defaultActionBuckets(10, safePosition === 'SB' ? 2 : 1), [safePosition]);
-  const gtoAction: RangeAction = gtoRange[selectedHand] ?? 'fold';
 
-  const selectedProfile = profiles.find(p => p.id === selectedProfileId) ?? null;
+  const completeHero = heroCards.length === 2;
+  const heroSummary = completeHero ? handLabel(heroCards[0], heroCards[1]) : 'Choose two cards';
+  const latestAvailable = [...streetStats].reverse().find(stats => stats.available) ?? streetStats[0];
+  const activeLookupMeta = activeLookupTab ? LOOKUP_TABS.find(tab => tab.id === activeLookupTab) : null;
 
-  const profileAction = useMemo((): RangeAction | null => {
-    if (!selectedProfile) return null;
-    const pos = selectedProfile.positions.find(p => p.position === safePosition);
-    const sit = pos?.situations[DEFAULT_ACTION_CONTEXT];
-    return sit ? (sit.range[selectedHand] ?? 'fold') : null;
-  }, [selectedHand, selectedProfile, safePosition]);
+  const turnUnavailable = [...heroCards, ...flopCards, ...riverCard];
+  const riverUnavailable = [...heroCards, ...flopCards, ...turnCard];
 
-  // Range used for both the picker grid and the display mini grid
-  const activeRange = useMemo((): Record<string, RangeAction> => {
-    if (!selectedProfile) return gtoRange;
-    const pos = selectedProfile.positions.find(p => p.position === safePosition);
-    return pos?.situations[DEFAULT_ACTION_CONTEXT]?.range ?? gtoRange;
-  }, [selectedProfile, safePosition, gtoRange]);
-
-  const activeBuckets = useMemo(() => {
-    if (!selectedProfile) return gtoBuckets;
-    const pos = selectedProfile.positions.find(p => p.position === safePosition);
-    const situation = pos?.situations[DEFAULT_ACTION_CONTEXT];
-    return situation ? ensureActionBuckets(situation) : gtoBuckets;
-  }, [gtoBuckets, selectedProfile, safePosition]);
-
-  // Pot odds: fraction→equity for preset chips (bet / (pot + bet) where pot=1 unit)
-  const POT_PRESETS: { key: string; label: string; fraction: number }[] = [
-    { key: '1/4', label: '¼ pot',  fraction: 0.25 },
-    { key: '1/3', label: '⅓ pot',  fraction: 1/3  },
-    { key: '1/2', label: '½ pot',  fraction: 0.5  },
-    { key: '2/3', label: '⅔ pot',  fraction: 2/3  },
-    { key: '3/4', label: '¾ pot',  fraction: 0.75 },
-    { key: 'pot', label: 'Pot',    fraction: 1.0  },
-    { key: '2x',  label: '2× Pot', fraction: 2.0  },
-  ];
-
-  const potOddsResult = useMemo(() => {
-    if (potPreset === null) {
-      // Custom
-      if (customBet <= 0 || customPot <= 0) return null;
-      const eq = customBet / (customPot + customBet) * 100;
-      return { eq: eq.toFixed(1), formula: `${customBet} / (${customPot} + ${customBet})` };
-    }
-    const preset = POT_PRESETS.find(p => p.key === potPreset);
-    if (!preset) return null;
-    const f = preset.fraction;
-    const eq = f / (1 + f) * 100;
-    const betStr  = f === 1/3 ? '1' : f === 2/3 ? '2' : String(f);
-    const potStr  = f === 1/3 ? '3' : f === 2/3 ? '3' : '1';
-    return { eq: eq.toFixed(1), formula: `${betStr} / (${potStr} + ${betStr})` };
-  }, [potPreset, customBet, customPot]);
-
-  const profileMismatch = profileAction !== null && gtoAction !== profileAction;
-
-  const gtoSubtitle = exactGtoChart
-    ? tableSize === 2 && exactGtoChart.position === 'BTN'
-      ? `${safePosition} / SB · heads-up open · ${tableSize}-max · ${exactGtoChart.publishedPct}% baseline`
-      : exactGtoChart.position === 'BB'
-      ? `${safePosition} · defend blind · ${tableSize}-max · baseline chart`
-      : exactGtoChart.publishedPct === null
-      ? `${safePosition} · no RFI open · ${tableSize}-max`
-      : `${safePosition} · RFI · ${tableSize}-max · ${exactGtoChart.publishedPct}% researched chart`
-    : `${safePosition} · RFI · ${tableSize}-max · top ${vpip}% range`;
-
-  const gtoNote = exactGtoChart
-    ? tableSize === 2 && exactGtoChart.position === 'BTN'
-      ? gtoAction !== 'fold'
-        ? `${selectedHand} is a ${actionLabel(gtoAction, gtoBuckets)} hand in the heads-up BTN/SB baseline. ${exactGtoChart.note}`
-        : `${selectedHand} is outside the heads-up BTN/SB baseline. ${exactGtoChart.note}`
-      : exactGtoChart.position === 'BB'
-      ? gtoAction !== 'fold'
-        ? `${selectedHand} is a ${actionLabel(gtoAction, gtoBuckets)} hand in the BB defense baseline. ${exactGtoChart.note}`
-        : `${selectedHand} is outside the BB defense baseline. ${exactGtoChart.note}`
-      : gtoAction !== 'fold'
-        ? `${selectedHand} is a ${actionLabel(gtoAction, gtoBuckets)} hand in the researched ${safePosition} RFI chart.`
-        : `${selectedHand} is outside the researched ${safePosition} RFI chart. ${exactGtoChart.note}`
-    : gtoAction === 'raise'
-      ? `In the top ${vpip}% GTO opening range for ${safePosition}.`
-      : `Outside the ${vpip}% GTO opening range for ${safePosition}.`;
-
-  const profileNote = profileAction === null
-    ? `Profile has no data for ${safePosition}.`
-    : profileAction === 'fold'
-      ? 'Not in your range: fold.'
-      : `In your ${actionLabel(profileAction, activeBuckets)} range.`;
-
-  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="hl-wrapper">
-      {/* Header */}
       <div className="hl-header">
         <button className="back-btn" onClick={onBack}>← Poker GTO</button>
         <div>
-          <h1 className="hl-title">What Should I Do?</h1>
+          <h1 className="hl-title">Hand Lookup Lab</h1>
           <p className="hl-desc">
-            Select a hand and position to get a GTO recommendation
-            {profiles.length > 0 ? ' and compare it to any saved profile.' : '.'}
+            Look up exact hole cards, add board runouts, and compare equity, made hand, draw pressure, and range context by street.
           </p>
         </div>
       </div>
 
       <div className="hl-body">
-
-        {/* ── Left: inputs ── */}
         <div className="hl-inputs">
-
-          {/* ── Hand input section ── */}
-          <div className="hl-section">
-            <div className="hl-hand-header">
-              <h3 className="hl-section-title">Hand</h3>
-              {/* Mode toggle */}
-              <div className="hl-mode-toggle">
+          <div className="hl-section hl-lookup-tabs-section">
+            <div className="hl-section-heading-row">
+              <h3 className="hl-section-title">Lookup Builder</h3>
+              <div className="hl-section-actions">
                 <button
-                  className={`hl-mode-btn${!showGrid ? ' active' : ''}`}
-                  onClick={() => setShowGrid(false)}
-                  title="Type hand notation (e.g. AKs, JJ, 72o)"
+                  className={`hl-inline-btn${activeLookupTab === 'board' ? ' active' : ''}`}
+                  onClick={() => setActiveLookupTab(activeLookupTab === 'board' ? null : 'board')}
                 >
-                  Text
+                  Full board
                 </button>
-                <button
-                  className={`hl-mode-btn${showGrid ? ' active' : ''}`}
-                  onClick={() => setShowGrid(true)}
-                  title="Tap a cell to select a hand"
-                >
-                  Grid
-                </button>
+                <button className="hl-inline-btn" onClick={clearBoard}>Clear board</button>
               </div>
             </div>
 
-            {/* Text input — always visible */}
-            <div className="hl-text-input-row">
-              <input
-                className={`hl-text-input${textError ? ' hl-text-error' : ''}`}
-                value={textInput}
-                onChange={e => handleTextChange(e.target.value)}
-                placeholder="e.g. AKs, JJ, 72o, T9s"
-                spellCheck={false}
-                autoComplete="off"
-                autoCapitalize="characters"
-              />
-              <div className="hl-hand-badge">
-                {!textError && selectedHand ? (
-                  <>
-                    <span className="hl-hand-notation">{selectedHand}</span>
-                    {rank && <span className="hl-hand-rank">#{rank}</span>}
-                  </>
-                ) : textError ? (
-                  <span className="hl-hand-invalid">?</span>
-                ) : null}
+            <div className="hl-equity-hero hl-current-scenario-card">
+              <div className="hl-current-actions">
+                <button
+                  type="button"
+                  className={`hl-current-edit-target hl-current-hero-target${activeLookupTab === 'hero' ? ' active' : ''}`}
+                  onClick={() => setActiveLookupTab(activeLookupTab === 'hero' ? null : 'hero')}
+                  aria-expanded={activeLookupTab === 'hero'}
+                >
+                  <span className="hl-result-title">Your hand</span>
+                  <CardSlotStrip cards={heroCards} slots={2} />
+                  <span className="hl-result-subtitle">
+                    {heroSummary} · {heroNotation}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={`hl-current-edit-target hl-board-street-target hl-flop-target${activeLookupTab === 'flop' ? ' active' : ''}`}
+                  onClick={() => setActiveLookupTab(activeLookupTab === 'flop' ? null : 'flop')}
+                  aria-expanded={activeLookupTab === 'flop'}
+                >
+                  <span className="hl-result-title">Flop</span>
+                  <CardSlotStrip cards={flopCards} slots={3} />
+                  <span className="hl-result-subtitle">{flopCards.length}/3</span>
+                </button>
+                <button
+                  type="button"
+                  className={`hl-current-edit-target hl-board-street-target${activeLookupTab === 'turn' ? ' active' : ''}`}
+                  onClick={() => setActiveLookupTab(activeLookupTab === 'turn' ? null : 'turn')}
+                  aria-expanded={activeLookupTab === 'turn'}
+                >
+                  <span className="hl-result-title">Turn</span>
+                  <CardSlotStrip cards={turnCard} slots={1} />
+                  <span className="hl-result-subtitle">{turnCard.length}/1</span>
+                </button>
+                <button
+                  type="button"
+                  className={`hl-current-edit-target hl-board-street-target${activeLookupTab === 'river' ? ' active' : ''}`}
+                  onClick={() => setActiveLookupTab(activeLookupTab === 'river' ? null : 'river')}
+                  aria-expanded={activeLookupTab === 'river'}
+                >
+                  <span className="hl-result-title">River</span>
+                  <CardSlotStrip cards={riverCard} slots={1} />
+                  <span className="hl-result-subtitle">{riverCard.length}/1</span>
+                </button>
+              </div>
+              <div className="hl-equity-big">
+                <span>{formatPct(latestAvailable.equityPct)}</span>
+                <small>{latestAvailable.label} equity</small>
               </div>
             </div>
-            {textError && (
-              <div className="hl-text-hint">
-                Type a hand: <code>AKs</code> <code>AKo</code> <code>AK</code> <code>JJ</code> <code>T9s</code>
-              </div>
-            )}
 
-            {/* Grid picker */}
-            {showGrid && (
-              <div className="hl-grid-picker-wrap">
-                <HandPickerGrid
-                  selectedHand={selectedHand}
-                  range={activeRange}
-                  buckets={activeBuckets}
-                  onSelect={selectFromGrid}
+            {activeLookupTab && (
+            <div className="hl-tab-panel">
+              <div className="hl-tab-panel-head">
+                <div>
+                  <div className="hl-tab-title">{activeLookupMeta?.label}</div>
+                  <div className="hl-tab-helper">{activeLookupMeta?.helper}</div>
+                </div>
+                {activeLookupTab === 'hero' && (
+                  <div className="hl-mode-toggle">
+                    <button
+                      className={`hl-mode-btn${!showGrid ? ' active' : ''}`}
+                      onClick={() => setShowGrid(false)}
+                      title="Type hand notation"
+                    >
+                      Text
+                    </button>
+                    <button
+                      className={`hl-mode-btn${showGrid ? ' active' : ''}`}
+                      onClick={() => setShowGrid(true)}
+                      title="Open range grid"
+                    >
+                      Grid
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {activeLookupTab === 'hero' && (
+                <>
+                  <CardPicker
+                    value={heroCards}
+                    onChange={handleHeroCardsChange}
+                    maxCards={2}
+                    label="Exact cards"
+                    unavailableCards={boardCards}
+                  />
+
+                  <div className="hl-text-input-row">
+                    <input
+                      className={`hl-text-input${textError ? ' hl-text-error' : ''}`}
+                      value={textInput}
+                      onChange={e => handleTextChange(e.target.value)}
+                      placeholder="AKs, JJ, 72o"
+                      spellCheck={false}
+                      autoComplete="off"
+                      autoCapitalize="characters"
+                    />
+                    <div className="hl-hand-badge">
+                      {!textError && heroNotation ? (
+                        <>
+                          <span className="hl-hand-notation">{heroNotation}</span>
+                          {rank && <span className="hl-hand-rank">#{rank}</span>}
+                        </>
+                      ) : textError ? (
+                        <span className="hl-hand-invalid">?</span>
+                      ) : null}
+                    </div>
+                  </div>
+                  {textError && (
+                    <div className="hl-text-hint">
+                      Type a hand like <code>AKs</code>, <code>AKo</code>, <code>JJ</code>, or <code>T9s</code>.
+                    </div>
+                  )}
+
+                  {showGrid && (
+                    <div className="hl-grid-picker-wrap">
+                      <HandPickerGrid
+                        selectedHand={heroNotation}
+                        onSelect={selectFromGrid}
+                      />
+                      <div className="hl-grid-picker-hint">
+                        Grid cells load a matching exact-card example when possible.
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {activeLookupTab === 'flop' && (
+                <CardPicker
+                  value={flopCards}
+                  onChange={handleFlopCardsChange}
+                  maxCards={3}
+                  label="Flop"
+                  unavailableCards={[...heroCards, ...turnCard, ...riverCard]}
                 />
-                <div className="hl-grid-picker-hint">
-                  Cells colored by {selectedProfile ? `"${selectedProfile.name}"` : 'GTO'} range · tap to select
-                </div>
-              </div>
-            )}
-          </div>
+              )}
 
-          {/* ── Situation ── */}
-          <div className="hl-section">
-            <h3 className="hl-section-title">Situation</h3>
-            <div className="hl-sit-row">
-              <div className="hl-sit-field">
-                <label className="hl-label">Table size</label>
-                <select className="hl-select" value={tableSize} onChange={e => handleTableSizeChange(Number(e.target.value))}>
-                  {[2, 3, 4, 5, 6, 7, 8, 9].map(n => (
-                    <option key={n} value={n}>{n === 2 ? 'HU (2)' : `${n}-max`}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="hl-sit-field">
-                <label className="hl-label">Position</label>
-                <select className="hl-select" value={safePosition} onChange={e => setPosition(e.target.value)}>
-                  {positions.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </div>
-              <div className="hl-sit-field">
-                <label className="hl-label">Action before</label>
-                <select className="hl-select" disabled>
-                  <option>
-                    {tableSize === 2 && safePosition === 'BTN'
-                      ? 'Heads-up open (BTN/SB)'
-                      : safePosition === 'BB'
-                        ? 'Facing open (defend)'
-                        : 'All folded (RFI)'}
-                  </option>
-                </select>
-                <span className="hl-coming-soon">
-                  {tableSize === 2
-                    ? 'Heads-up ranges are sizing-sensitive'
-                    : safePosition === 'BB'
-                      ? 'Defense varies by opener/size'
-                      : 'More contexts soon'}
-                </span>
-              </div>
+              {activeLookupTab === 'turn' && (
+                <CardPicker
+                  value={turnCard}
+                  onChange={handleTurnCardChange}
+                  maxCards={1}
+                  label="Turn"
+                  unavailableCards={turnUnavailable}
+                />
+              )}
+
+              {activeLookupTab === 'river' && (
+                <CardPicker
+                  value={riverCard}
+                  onChange={handleRiverCardChange}
+                  maxCards={1}
+                  label="River"
+                  unavailableCards={riverUnavailable}
+                />
+              )}
+
+              {activeLookupTab === 'board' && (
+                <CardPicker
+                  value={boardCards}
+                  onChange={handleBoardCardsChange}
+                  maxCards={5}
+                  label="Full board"
+                  unavailableCards={heroCards}
+                />
+              )}
             </div>
-          </div>
-
-          {/* ── Profile compare ── */}
-          {profiles.length > 0 && (
-            <div className="hl-section">
-              <h3 className="hl-section-title">Compare Profile</h3>
-              <select
-                className="hl-select hl-profile-sel"
-                value={selectedProfileId ?? ''}
-                onChange={e => setSelectedProfileId(e.target.value || null)}
-              >
-                <option value="">— No profile (show GTO) —</option>
-                {profiles.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.type} · {p.tableSize}-max)
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* ── Pot odds helper ── */}
-          <div className="hl-section">
-            <h3 className="hl-section-title">Pot Odds Helper</h3>
-
-            {/* Preset chips */}
-            <div className="hl-po-chips">
-              {POT_PRESETS.map(p => (
-                <button
-                  key={p.key}
-                  className={`hl-po-chip${potPreset === p.key ? ' active' : ''}`}
-                  onClick={() => setPotPreset(p.key)}
-                >
-                  {p.label}
-                </button>
-              ))}
-              <button
-                className={`hl-po-chip hl-po-chip-custom${potPreset === null ? ' active' : ''}`}
-                onClick={() => setPotPreset(null)}
-              >
-                Custom…
-              </button>
-            </div>
-
-            {/* Custom inputs — shown only when Custom is selected */}
-            {potPreset === null && (
-              <div className="hl-po-custom-row">
-                <div className="hl-sit-field">
-                  <label className="hl-label">Pot (BB)</label>
-                  <input
-                    type="number" min={0} step={0.5}
-                    className="hl-num-input"
-                    value={customPotRaw}
-                    onChange={e => setCustomPotRaw(e.target.value)}
-                    onBlur={e => {
-                      const v = Math.max(0.5, Number(e.target.value) || 0.5);
-                      setCustomPot(v);
-                      setCustomPotRaw(String(v));
-                    }}
-                  />
-                </div>
-                <div className="hl-sit-field">
-                  <label className="hl-label">Facing bet (BB)</label>
-                  <input
-                    type="number" min={0} step={0.5}
-                    className="hl-num-input"
-                    value={customBetRaw}
-                    onChange={e => setCustomBetRaw(e.target.value)}
-                    onBlur={e => {
-                      const v = Math.max(0.5, Number(e.target.value) || 0.5);
-                      setCustomBet(v);
-                      setCustomBetRaw(String(v));
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Result */}
-            {potOddsResult && (
-              <div className="hl-po-result">
-                <span className="hl-po-formula">{potOddsResult.formula} =</span>
-                <span className="hl-po-value">{potOddsResult.eq}%</span>
-                <span className="hl-po-label">equity needed to call</span>
-              </div>
             )}
           </div>
 
         </div>
 
-        {/* ── Right: results ── */}
         <div className="hl-results">
-          <ResultPanel
-            title="GTO Recommendation"
-            subtitle={gtoSubtitle}
-            action={gtoAction}
-            note={gtoNote}
-            buckets={gtoBuckets}
-          />
-
-          {selectedProfile && (
-            <ResultPanel
-              title={`"${selectedProfile.name}"`}
-              subtitle={`${safePosition} · RFI · ${selectedProfile.tableSize}-max profile`}
-              action={profileAction}
-              note={profileNote}
-              buckets={activeBuckets}
-              mismatch={profileMismatch}
-            />
-          )}
-
-          <div className="hl-grid-section">
-            <div className="hl-grid-label">
-              {selectedProfile
-                ? `${selectedProfile.name} — ${safePosition} RFI range`
-                : `GTO range — ${safePosition} in ${tableSize}-max`}
-              <span className="hl-grid-legend"> · {selectedHand} highlighted</span>
-            </div>
-            <MiniGrid hand={selectedHand} range={activeRange} buckets={activeBuckets} />
-            <div className="hl-grid-legend-row">
-              {activeBuckets.map(cfg => {
+          <div className="hl-street-table-wrap">
+            <div className="hl-grid-label">Street-by-street statistics vs one random hand</div>
+            <div className="hl-street-table">
+              {streetStats.map(stats => {
+                const outsExpanded = expandedOutsStreet === stats.street;
+                const outsClickable = stats.outDetails.length > 0;
+                const outGroups = groupOutDetails(stats.outDetails);
+                const liveOutGroups = outGroups.filter(group => !ruledOutOutGroups.has(outGroupKey(stats.street, group.key)));
+                const liveOutCount = liveOutGroups.reduce((sum, group) => sum + group.cards.length, 0);
+                const hasRuledOuts = liveOutCount !== stats.outDetails.length;
                 return (
-                  <span key={cfg.id} className="hl-legend-chip" style={{ color: cfg.text, borderColor: cfg.border }}>
-                    {cfg.emoji} {cfg.label}
-                  </span>
+                  <div key={stats.street} className="hl-street-block">
+                    <div className={`hl-street-row${stats.available ? '' : ' pending'}`}>
+                      <div className="hl-street-name">
+                        <strong>{stats.label}</strong>
+                        <span>{formatSamples(stats)}</span>
+                      </div>
+                      <div className="hl-stat-cell primary">
+                        <span>{formatPct(stats.equityPct)}</span>
+                        <small>Equity</small>
+                      </div>
+                      <div className="hl-stat-cell">
+                        <span>{formatPct(stats.winPct)}</span>
+                        <small>Win</small>
+                      </div>
+                      <div className="hl-stat-cell">
+                        <span>{formatPct(stats.tiePct)}</span>
+                        <small>Tie</small>
+                      </div>
+                      <div className="hl-stat-cell">
+                        <button
+                          type="button"
+                          className="hl-outs-button"
+                          onClick={() => outsClickable && setExpandedOutsStreet(outsExpanded ? null : stats.street)}
+                          disabled={!outsClickable}
+                          aria-expanded={outsExpanded}
+                        >
+                          <span>
+                            {stats.outs === null ? '-' : hasRuledOuts ? `${liveOutCount}/${stats.outs}` : stats.outs}
+                          </span>
+                          <small>{hasRuledOuts ? 'Live outs' : 'Outs'}</small>
+                        </button>
+                      </div>
+                      <div className="hl-street-detail">
+                        <strong>{stats.madeHand}</strong>
+                        <span>{stats.drawSummary}</span>
+                        {stats.boardTexture.length > 0 && (
+                          <div className="hl-texture-tags">
+                            {stats.boardTexture.map(label => <span key={label}>{label}</span>)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {outsExpanded && (
+                      <div className="hl-outs-detail">
+                        {outGroups.map(group => (
+                          <div
+                            key={group.key}
+                            className={`hl-outs-group${ruledOutOutGroups.has(outGroupKey(stats.street, group.key)) ? ' ruled-out' : ''}`}
+                          >
+                            <div className="hl-outs-group-head">
+                              <div>
+                                <div className="hl-outs-group-title">{group.label}</div>
+                                <div className="hl-outs-group-subtitle">{group.note} · {group.cards.length} card{group.cards.length === 1 ? '' : 's'}</div>
+                              </div>
+                              <button
+                                type="button"
+                                className="hl-outs-ruleout"
+                                onClick={() => toggleRuledOutGroup(stats.street, group.key)}
+                                aria-label={ruledOutOutGroups.has(outGroupKey(stats.street, group.key))
+                                  ? `Restore ${group.label} outs`
+                                  : `Rule out ${group.label} as a viable winning hand`}
+                              >
+                                {ruledOutOutGroups.has(outGroupKey(stats.street, group.key)) ? 'Undo' : 'X'}
+                              </button>
+                            </div>
+                            <div className="hl-outs-cards">
+                              {group.cards.map(card => (
+                                <PlayingCard key={cardKey(card)} card={card} size="sm" />
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
           </div>
         </div>
-
       </div>
     </div>
   );
