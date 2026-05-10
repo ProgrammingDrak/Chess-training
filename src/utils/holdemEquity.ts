@@ -27,6 +27,61 @@ export interface HoldemOutDetail {
   improvesTo: string;
   handRank: number;
   note: string;
+  improvesCurrent: boolean;
+  improvesHandClass: boolean;
+}
+
+export interface SpecificHoldemPlayer {
+  id: string;
+  name: string;
+  cards: Card[];
+}
+
+export interface SpecificHoldemPlayerResult {
+  id: string;
+  name: string;
+  cards: Card[];
+  equityPct: number;
+  winPct: number;
+  tiePct: number;
+  lossPct: number;
+  wins: number;
+  ties: number;
+  losses: number;
+  equityShares: number;
+}
+
+export interface SpecificHoldemEquityResult {
+  available: boolean;
+  error: string | null;
+  board: Card[];
+  missingBoardCards: number;
+  samples: number;
+  exact: boolean;
+  players: SpecificHoldemPlayerResult[];
+}
+
+export type NextCardImpactCategory = 'danger' | 'chop' | 'hero-upgrade';
+
+export interface NextCardImpact {
+  card: Card;
+  category: NextCardImpactCategory;
+  label: string;
+  handClass: string;
+  handRank: number;
+  affectedPlayerId: string | null;
+  affectedPlayerName: string | null;
+  defaultIncluded: boolean;
+}
+
+export interface NextCardImpactResult {
+  available: boolean;
+  error: string | null;
+  nextStreetLabel: 'Turn' | 'River' | null;
+  totalNextCards: number;
+  currentHeroHandRank: number;
+  currentHeroHandClass: string | null;
+  impacts: NextCardImpact[];
 }
 
 interface HandValue {
@@ -68,6 +123,8 @@ const VALUE_RANK: Record<number, Rank> = {
 
 const SUITS: Suit[] = ['s', 'h', 'd', 'c'];
 const RANKS: Rank[] = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
+const MAX_EXACT_SPECIFIC_RUNOUTS = 50000;
+const SPECIFIC_RUNOUT_SAMPLES = 2500;
 const HAND_CLASS = [
   'High card',
   'One pair',
@@ -135,6 +192,298 @@ export function analyzeHoldemScenario(heroCards: Card[], boardCards: Card[]): Ho
   });
 }
 
+export function calculateSpecificHoldemEquity(
+  players: SpecificHoldemPlayer[],
+  boardCards: Card[],
+): SpecificHoldemEquityResult {
+  const activePlayers = players.filter(player => player.cards.length > 0);
+  const completePlayers = activePlayers.filter(player => player.cards.length === 2);
+  const board = boardCards.slice(0, 5);
+
+  const basePlayers = players.map(player => ({
+    id: player.id,
+    name: player.name,
+    cards: player.cards,
+    equityPct: 0,
+    winPct: 0,
+    tiePct: 0,
+    lossPct: 0,
+    wins: 0,
+    ties: 0,
+    losses: 0,
+    equityShares: 0,
+  }));
+
+  if (completePlayers.length < 2) {
+    return {
+      available: false,
+      error: 'Add at least two complete hands.',
+      board,
+      missingBoardCards: Math.max(0, 5 - board.length),
+      samples: 0,
+      exact: true,
+      players: basePlayers,
+    };
+  }
+
+  const knownCards = [...completePlayers.flatMap(player => player.cards), ...board];
+  const knownKeys = knownCards.map(cardKey);
+  if (new Set(knownKeys).size !== knownKeys.length) {
+    return {
+      available: false,
+      error: 'Each card can only appear once.',
+      board,
+      missingBoardCards: Math.max(0, 5 - board.length),
+      samples: 0,
+      exact: true,
+      players: basePlayers,
+    };
+  }
+
+  if (board.length > 5) {
+    return {
+      available: false,
+      error: 'The board can only have five cards.',
+      board,
+      missingBoardCards: 0,
+      samples: 0,
+      exact: true,
+      players: basePlayers,
+    };
+  }
+
+  const missingBoardCards = 5 - board.length;
+  const deck = buildDeck().filter(card => !knownKeys.includes(cardKey(card)));
+  const totalRunouts = combinationCount(deck.length, missingBoardCards);
+  const exact = totalRunouts <= MAX_EXACT_SPECIFIC_RUNOUTS;
+  const results = new Map<string, SpecificHoldemPlayerResult>(
+    completePlayers.map(player => [
+      player.id,
+      {
+        id: player.id,
+        name: player.name,
+        cards: player.cards,
+        equityPct: 0,
+        winPct: 0,
+        tiePct: 0,
+        lossPct: 0,
+        wins: 0,
+        ties: 0,
+        losses: 0,
+        equityShares: 0,
+      },
+    ]),
+  );
+
+  let samples = 0;
+  const runout: Card[] = [];
+
+  function scoreRunout(finalBoard: Card[]) {
+    const scored = completePlayers.map(player => ({
+      player,
+      value: evaluateBestHand([...player.cards, ...finalBoard]),
+    }));
+    let best = scored[0].value;
+    for (let i = 1; i < scored.length; i++) {
+      if (compareHandValues(scored[i].value, best) > 0) best = scored[i].value;
+    }
+
+    const winners = scored.filter(score => compareHandValues(score.value, best) === 0);
+    const winnerIds = new Set(winners.map(winner => winner.player.id));
+    const share = 1 / winners.length;
+
+    for (const score of scored) {
+      const result = results.get(score.player.id);
+      if (!result) continue;
+      if (winnerIds.has(score.player.id)) {
+        result.equityShares += share;
+        if (winners.length === 1) result.wins++;
+        else result.ties++;
+      } else {
+        result.losses++;
+      }
+    }
+    samples++;
+  }
+
+  function enumerateRunouts(startIndex: number) {
+    if (runout.length === missingBoardCards) {
+      scoreRunout([...board, ...runout]);
+      return;
+    }
+
+    const needed = missingBoardCards - runout.length;
+    for (let i = startIndex; i <= deck.length - needed; i++) {
+      runout.push(deck[i]);
+      enumerateRunouts(i + 1);
+      runout.pop();
+    }
+  }
+
+  if (exact) {
+    enumerateRunouts(0);
+  } else {
+    const seed = seedFromCards(knownCards);
+    for (let i = 0; i < SPECIFIC_RUNOUT_SAMPLES; i++) {
+      scoreRunout([...board, ...sampleCards(deck, missingBoardCards, seed + i * 131)]);
+    }
+  }
+
+  const finalPlayers = players.map(player => {
+    const result = results.get(player.id);
+    if (!result || samples === 0) {
+      return basePlayers.find(base => base.id === player.id) ?? {
+        id: player.id,
+        name: player.name,
+        cards: player.cards,
+        equityPct: 0,
+        winPct: 0,
+        tiePct: 0,
+        lossPct: 0,
+        wins: 0,
+        ties: 0,
+        losses: 0,
+        equityShares: 0,
+      };
+    }
+    return {
+      ...result,
+      equityPct: (result.equityShares / samples) * 100,
+      winPct: (result.wins / samples) * 100,
+      tiePct: (result.ties / samples) * 100,
+      lossPct: (result.losses / samples) * 100,
+    };
+  });
+
+  return {
+    available: true,
+    error: null,
+    board,
+    missingBoardCards,
+    samples,
+    exact,
+    players: finalPlayers,
+  };
+}
+
+export function analyzeNextCardImpacts(
+  heroCards: Card[],
+  opponents: SpecificHoldemPlayer[],
+  boardCards: Card[],
+): NextCardImpactResult {
+  const board = boardCards.slice(0, 5);
+  const completeOpponents = opponents.filter(player => player.cards.length === 2);
+  const currentHeroValue = heroCards.length === 2 && board.length >= 3
+    ? evaluateBestHand([...heroCards, ...board])
+    : null;
+
+  if (heroCards.length !== 2 || board.length < 3 || board.length >= 5 || completeOpponents.length === 0 || !currentHeroValue) {
+    return {
+      available: false,
+      error: 'Need Hero, at least one exact opponent, and a flop or turn.',
+      nextStreetLabel: board.length === 3 ? 'Turn' : board.length === 4 ? 'River' : null,
+      totalNextCards: 0,
+      currentHeroHandRank: currentHeroValue?.rank ?? 0,
+      currentHeroHandClass: currentHeroValue ? HAND_CLASS[currentHeroValue.rank] : null,
+      impacts: [],
+    };
+  }
+
+  const knownCards = [...heroCards, ...completeOpponents.flatMap(player => player.cards), ...board];
+  const knownKeys = knownCards.map(cardKey);
+  if (new Set(knownKeys).size !== knownKeys.length) {
+    return {
+      available: false,
+      error: 'Each card can only appear once.',
+      nextStreetLabel: board.length === 3 ? 'Turn' : 'River',
+      totalNextCards: 0,
+      currentHeroHandRank: currentHeroValue.rank,
+      currentHeroHandClass: HAND_CLASS[currentHeroValue.rank],
+      impacts: [],
+    };
+  }
+
+  const deck = buildDeck().filter(card => !knownKeys.includes(cardKey(card)));
+  const impacts: NextCardImpact[] = [];
+
+  for (const card of deck) {
+    const nextBoard = [...board, card];
+    const heroNext = evaluateBestHand([...heroCards, ...nextBoard]);
+    const heroHandClass = HAND_CLASS[heroNext.rank];
+
+    if (heroNext.rank > currentHeroValue.rank) {
+      impacts.push({
+        card,
+        category: 'hero-upgrade',
+        label: `Hero improves to ${heroHandClass.toLowerCase()}`,
+        handClass: heroHandClass,
+        handRank: heroNext.rank,
+        affectedPlayerId: 'hero',
+        affectedPlayerName: 'Hero',
+        defaultIncluded: true,
+      });
+    }
+
+    const opponentScores = completeOpponents.map(player => ({
+      player,
+      value: evaluateBestHand([...player.cards, ...nextBoard]),
+    }));
+    const ahead = opponentScores.filter(score => compareHandValues(score.value, heroNext) > 0);
+
+    if (ahead.length > 0) {
+      for (const score of ahead) {
+        const handClass = HAND_CLASS[score.value.rank];
+        impacts.push({
+          card,
+          category: 'danger',
+          label: `${score.player.name} improves to ${handClass.toLowerCase()}`,
+          handClass,
+          handRank: score.value.rank,
+          affectedPlayerId: score.player.id,
+          affectedPlayerName: score.player.name,
+          defaultIncluded: true,
+        });
+      }
+      continue;
+    }
+
+    const tied = opponentScores.filter(score => compareHandValues(score.value, heroNext) === 0);
+    for (const score of tied) {
+      const handClass = HAND_CLASS[score.value.rank];
+      impacts.push({
+        card,
+        category: 'chop',
+        label: `${score.player.name} chops ${handClass.toLowerCase()}`,
+        handClass,
+        handRank: score.value.rank,
+        affectedPlayerId: score.player.id,
+        affectedPlayerName: score.player.name,
+        defaultIncluded: true,
+      });
+    }
+  }
+
+  return {
+    available: true,
+    error: null,
+    nextStreetLabel: board.length === 3 ? 'Turn' : 'River',
+    totalNextCards: deck.length,
+    currentHeroHandRank: currentHeroValue.rank,
+    currentHeroHandClass: HAND_CLASS[currentHeroValue.rank],
+    impacts,
+  };
+}
+
+function combinationCount(n: number, k: number): number {
+  if (k < 0 || k > n) return 0;
+  const picks = Math.min(k, n - k);
+  let result = 1;
+  for (let i = 1; i <= picks; i++) {
+    result = (result * (n - picks + i)) / i;
+  }
+  return Math.round(result);
+}
+
 function emptyStreet(street: HoldemStreet, label: string, board: Card[], needed: number): HoldemStreetStats {
   return {
     street,
@@ -180,13 +529,13 @@ function calculateHeadsUpEquity(heroCards: Card[], board: Card[]) {
   }
 
   const missingBoard = 5 - board.length;
-  const iterations = board.length === 0 ? 9000 : board.length === 3 ? 12000 : 10000;
+  const iterations = board.length === 0 ? 2500 : board.length === 3 ? 4000 : 2500;
   const seed = seedFromCards([...heroCards, ...board]);
 
   for (let i = 0; i < iterations; i++) {
-    const shuffled = deterministicShuffle(deck, seed + i * 101);
-    const villain = shuffled.slice(0, 2);
-    const runout = shuffled.slice(2, 2 + missingBoard);
+    const sampled = sampleCards(deck, 2 + missingBoard, seed + i * 101);
+    const villain = sampled.slice(0, 2);
+    const runout = sampled.slice(2);
     const result = compareShowdown(heroCards, villain, [...board, ...runout]);
     if (result > 0) wins++;
     else if (result < 0) losses++;
@@ -353,10 +702,8 @@ function summarizeDraws(heroCards: Card[], board: Card[]) {
   const knownKeys = new Set(known.map(cardKey));
   const deck = buildDeck().filter(card => !knownKeys.has(cardKey(card)));
   const current = evaluateBestHand(known);
-  const improvingCards = deck.filter(card => (
-    compareHandValues(evaluateBestHand([...known, card]), current) > 0
-  ));
-  const outDetails = improvingCards.map(card => describeOutCard(card, known, current));
+  const outDetails = deck.map(card => describeOutCard(card, known, current));
+  const improvingCards = outDetails.filter(detail => detail.improvesCurrent);
 
   const labels: string[] = [];
   const flush = flushDrawSummary(known, deck);
@@ -374,15 +721,22 @@ function summarizeDraws(heroCards: Card[], board: Card[]) {
 function describeOutCard(card: Card, known: Card[], current: HandValue): HoldemOutDetail {
   const next = evaluateBestHand([...known, card]);
   const improvesTo = HAND_CLASS[next.rank];
-  const note = next.rank > current.rank
+  const comparison = compareHandValues(next, current);
+  const improvesCurrent = comparison > 0;
+  const improvesHandClass = next.rank > current.rank;
+  const note = improvesHandClass
     ? `Makes ${articleFor(improvesTo)} ${improvesTo.toLowerCase()}`
-    : `Improves your ${improvesTo.toLowerCase()}`;
+    : improvesCurrent
+      ? `Improves your ${improvesTo.toLowerCase()}`
+      : `Can finish as ${articleFor(improvesTo)} ${improvesTo.toLowerCase()}`;
 
   return {
     card,
     improvesTo,
     handRank: next.rank,
     note,
+    improvesCurrent,
+    improvesHandClass,
   };
 }
 
@@ -457,15 +811,20 @@ function describeBoardTexture(board: Card[]): string[] {
   return labels;
 }
 
-function deterministicShuffle(cards: Card[], seed: number): Card[] {
-  const out = [...cards];
+function sampleCards(cards: Card[], count: number, seed: number): Card[] {
+  const pool = [...cards];
+  const picked: Card[] = [];
   let state = seed || 1;
-  for (let i = out.length - 1; i > 0; i--) {
+
+  for (let i = 0; i < count && pool.length > 0; i++) {
     state = (state * 1664525 + 1013904223) >>> 0;
-    const j = state % (i + 1);
-    [out[i], out[j]] = [out[j], out[i]];
+    const index = state % pool.length;
+    picked.push(pool[index]);
+    pool[index] = pool[pool.length - 1];
+    pool.pop();
   }
-  return out;
+
+  return picked;
 }
 
 function seedFromCards(cards: Card[]): number {

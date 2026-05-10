@@ -3,10 +3,21 @@ import type { ReactNode } from 'react';
 import type { UserTier } from '../types/tiers';
 import { normalizeUserTier } from '../types/tiers';
 
+export type UserRole = 'user' | 'admin';
+
 export interface AuthUser {
   id: number;
   username: string;
   tier: UserTier;
+  membershipTier?: UserTier;
+  role: UserRole;
+  email?: string | null;
+  activePromo?: {
+    code: string;
+    tier: UserTier;
+    redeemedAt: string;
+    expiresAt: string;
+  } | null;
   createdAt?: string;
 }
 
@@ -14,7 +25,9 @@ interface AuthContextType {
   user: AuthUser | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string, email?: string, promoCode?: string) => Promise<void>;
+  redeemPromoCode: (code: string) => Promise<void>;
+  refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -33,7 +46,16 @@ async function readApiJson<T>(res: Response, fallbackMessage: string): Promise<T
 }
 
 function normalizeAuthUser(user: AuthUser): AuthUser {
-  return { ...user, tier: normalizeUserTier(user.tier) };
+  return {
+    ...user,
+    tier: normalizeUserTier(user.tier),
+    membershipTier: normalizeUserTier(user.membershipTier ?? user.tier),
+    activePromo: user.activePromo ? {
+      ...user.activePromo,
+      tier: normalizeUserTier(user.activePromo.tier),
+    } : null,
+    role: user.role === 'admin' ? 'admin' : 'user',
+  };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -67,16 +89,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(normalizeAuthUser(data.user));
   }, []);
 
-  const register = useCallback(async (username: string, password: string) => {
+  const refreshUser = useCallback(async () => {
+    const res = await fetch('/api/auth/me', { credentials: 'include' });
+    const data = await readApiJson<{ user: AuthUser | null }>(res, 'Session unavailable');
+    setUser(data.user ? normalizeAuthUser(data.user) : null);
+  }, []);
+
+  const register = useCallback(async (username: string, password: string, email?: string, promoCode?: string) => {
     const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, email, promoCode }),
     });
     const data = await readApiJson<{ user?: AuthUser; error?: string }>(res, 'Registration failed');
     if (!res.ok) throw new Error(data.error ?? 'Registration failed');
     if (!data.user) throw new Error('Registration failed');
+    setUser(normalizeAuthUser(data.user));
+  }, []);
+
+  const redeemPromoCode = useCallback(async (code: string) => {
+    const res = await fetch('/api/account/promo-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ code }),
+    });
+    const data = await readApiJson<{ user?: AuthUser; error?: string }>(res, 'Promo code failed');
+    if (!res.ok) throw new Error(data.error ?? 'Promo code failed');
+    if (!data.user) throw new Error('Promo code failed');
     setUser(normalizeAuthUser(data.user));
   }, []);
 
@@ -86,7 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, redeemPromoCode, refreshUser, logout }}>
       {children}
     </AuthContext.Provider>
   );

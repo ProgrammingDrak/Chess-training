@@ -1,4 +1,7 @@
+import { POKER_DRILL_TIERS } from '../../data/featureTiers';
 import type { PokerDrillType } from '../../types/poker';
+import type { UserTier } from '../../types/tiers';
+import { getTierLabel } from '../../types/tiers';
 
 interface DrillModule {
   type: PokerDrillType;
@@ -66,6 +69,10 @@ interface PokerDrillsHomeProps {
   onBack: () => void;
 }
 
+function TierChip({ tier }: { tier: UserTier }) {
+  return <span className={`tier-chip tier-${tier}`}>{getTierLabel(tier)}</span>;
+}
+
 export function PokerDrillsHome({
   getDrillStats,
   onSelectDrill,
@@ -88,6 +95,7 @@ export function PokerDrillsHome({
         {DRILL_MODULES.map((module) => {
           const stats = getDrillStats(module.type);
           const hasStarted = stats.totalAttempts > 0;
+          const requiredTier = POKER_DRILL_TIERS[module.type];
 
           return (
             <button
@@ -96,7 +104,10 @@ export function PokerDrillsHome({
               onClick={() => onSelectDrill(module.type)}
             >
               <div className="drill-module-icon">{module.icon}</div>
-              <div className="drill-module-name">{module.name}</div>
+              <div className="drill-module-name">
+                {module.name}
+                {requiredTier && <TierChip tier={requiredTier} />}
+              </div>
               <div className="drill-module-desc">{module.description}</div>
               <div className="drill-module-meta">
                 <span className="drill-module-difficulty">{module.scenarioCount} scenarios</span>

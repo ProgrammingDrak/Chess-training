@@ -10,7 +10,10 @@ interface CardProps {
 export function PlayingCard({ card, size = 'md', faceDown = false }: CardProps) {
   const red = isRedSuit(card.suit);
   return (
-    <div className={`playing-card ${size} ${red ? 'red' : ''} ${faceDown ? 'face-down' : ''}`}>
+    <div
+      className={`playing-card ${size} suit-${card.suit} ${red ? 'red' : ''} ${faceDown ? 'face-down' : ''}`}
+      title={!faceDown ? `${card.rank}${SUIT_SYMBOLS[card.suit as Suit]}` : undefined}
+    >
       {!faceDown && (
         <>
           <span className="card-rank">{card.rank}</span>

@@ -3,6 +3,7 @@ export const USER_TIERS = ['user', 'gold', 'platinum', 'diamond'] as const;
 export type UserTier = (typeof USER_TIERS)[number];
 
 export const DEFAULT_USER_TIER: UserTier = 'user';
+export const HIGHEST_USER_TIER: UserTier = 'diamond';
 
 const TIER_RANK: Record<UserTier, number> = {
   user: 0,
