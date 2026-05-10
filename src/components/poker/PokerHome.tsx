@@ -1,3 +1,7 @@
+import { FEATURE_TIERS } from '../../data/featureTiers';
+import type { UserTier } from '../../types/tiers';
+import { getTierLabel } from '../../types/tiers';
+
 interface PokerHomeProps {
   onViewDashboard: () => void;
   onViewDrills: () => void;
@@ -5,6 +9,10 @@ interface PokerHomeProps {
   onViewHandLookup: () => void;
   onViewLiveSession: () => void;
   onBack: () => void;
+}
+
+function TierChip({ tier }: { tier: UserTier }) {
+  return <span className={`tier-chip tier-${tier}`}>{getTierLabel(tier)}</span>;
 }
 
 export function PokerHome({
@@ -49,7 +57,10 @@ export function PokerHome({
       >
         <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>🔎</div>
         <div style={{ flex: 1 }}>
-          <div className="drill-module-name">Hand Lookup Lab</div>
+          <div className="drill-module-name">
+            Hand Lookup Lab
+            <TierChip tier={FEATURE_TIERS.pokerHandLookup} />
+          </div>
           <div className="drill-module-desc">
             Look up exact hole cards, add flop, turn, and river runouts, then compare street-by-street
             equity, made-hand stats, draw pressure, and preflop range context.
@@ -64,7 +75,10 @@ export function PokerHome({
       >
         <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>📋</div>
         <div style={{ flex: 1 }}>
-          <div className="drill-module-name">Player Profiles</div>
+          <div className="drill-module-name">
+            Player Profiles
+            <TierChip tier={FEATURE_TIERS.pokerProfiles} />
+          </div>
           <div className="drill-module-desc">
             Build hand-range profiles for Hero and opponents. 4-color action grid (fold/limp/call/raise),
             per-position ranges, post-flop thresholds. Use them to benchmark decisions against any playing style.
@@ -79,7 +93,10 @@ export function PokerHome({
       >
         <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>🎲</div>
         <div style={{ flex: 1 }}>
-          <div className="drill-module-name">Live Session Tracker</div>
+          <div className="drill-module-name">
+            Live Session Tracker
+            <TierChip tier={FEATURE_TIERS.pokerLiveSession} />
+          </div>
           <div className="drill-module-desc">
             Track real hands at a real table. Tap the winner of each hand; the button advances
             automatically. Per-session stats: hands played, hands per hour, win % per player, win %

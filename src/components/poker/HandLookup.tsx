@@ -2,7 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { RANKS, cellHand } from '../../utils/handMatrix';
 import { HAND_RANK_MAP } from '../../data/poker/profileTemplates';
 import { cardKey } from '../../utils/cardInput';
-import { analyzeHoldemScenario, handNotationFromCards, type HoldemOutDetail, type HoldemStreetStats } from '../../utils/holdemEquity';
+import {
+  analyzeHoldemScenario,
+  analyzeNextCardImpacts,
+  calculateSpecificHoldemEquity,
+  handNotationFromCards,
+  type HoldemOutDetail,
+  type HoldemStreetStats,
+  type NextCardImpact,
+  type NextCardImpactCategory,
+} from '../../utils/holdemEquity';
 import { handLabel } from '../../utils/poker';
 import type { Card, Suit } from '../../types/poker';
 import { CardPicker } from './CardPicker';
@@ -11,7 +20,35 @@ import { PlayingCard } from './HandDisplay';
 const RANK_SET = new Set(RANKS as unknown as string[]);
 const SUIT_ORDER: Suit[] = ['s', 'h', 'd', 'c'];
 type LookupTab = 'hero' | 'flop' | 'turn' | 'river';
-type ActiveLookupTab = LookupTab | 'board';
+type ActiveLookupTab = LookupTab | 'board' | `opponent:${string}`;
+type OpponentHand = { id: string; name: string; cards: Card[] };
+
+function blankOpponent(index: number): OpponentHand {
+  return {
+    id: `villain-${Date.now()}-${index + 1}`,
+    name: `Villain ${index + 1}`,
+    cards: [],
+  };
+}
+
+function renumberOpponents(opponents: OpponentHand[]) {
+  return opponents.map((opponent, index) => ({
+    ...opponent,
+    name: `Villain ${index + 1}`,
+  }));
+}
+
+type LookupOutGroup = {
+  key: string;
+  label: string;
+  note: string;
+  handRank: number;
+  cards: Card[];
+  improvingCards: number;
+  betterClassCards: number;
+  defaultIncluded: boolean;
+  category: 'draw' | NextCardImpactCategory;
+};
 
 const LOOKUP_TABS: Array<{ id: ActiveLookupTab; label: string; helper: string }> = [
   { id: 'hero', label: 'Hero Hand', helper: 'Pick the exact two cards or type notation.' },
@@ -20,6 +57,8 @@ const LOOKUP_TABS: Array<{ id: ActiveLookupTab; label: string; helper: string }>
   { id: 'turn', label: 'Turn', helper: 'Add the turn card.' },
   { id: 'river', label: 'River', helper: 'Add the river card.' },
 ];
+
+const MAX_PLAYERS = 10;
 
 function parseHandInput(raw: string): string | null {
   const s = raw.trim().toUpperCase().replace(/10/g, 'T');
@@ -87,21 +126,127 @@ function formatSamples(stats: HoldemStreetStats): string {
   return stats.exact ? `${stats.samples.toLocaleString()} exact combos` : `${stats.samples.toLocaleString()} sims`;
 }
 
-function groupOutDetails(outDetails: HoldemOutDetail[]): Array<{ key: string; label: string; note: string; handRank: number; cards: Card[] }> {
-  const groups = new Map<string, { key: string; label: string; note: string; handRank: number; cards: Card[] }>();
+function formatRunouts(samples: number, exact: boolean): string {
+  if (samples === 0) return 'Waiting for complete hands';
+  return exact ? `${samples.toLocaleString()} exact river runouts` : `${samples.toLocaleString()} sampled river runouts`;
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function groupOutDetails(outDetails: HoldemOutDetail[]): LookupOutGroup[] {
+  const groups = new Map<string, LookupOutGroup>();
   for (const detail of outDetails) {
-    const key = detail.improvesTo;
+    const key = `draw:${detail.improvesTo}`;
     const group = groups.get(key) ?? {
       key,
       label: detail.improvesTo,
       note: detail.note,
       handRank: detail.handRank,
       cards: [],
+      improvingCards: 0,
+      betterClassCards: 0,
+      defaultIncluded: false,
+      category: 'draw',
     };
     group.cards.push(detail.card);
+    if (detail.improvesCurrent) group.improvingCards++;
+    if (detail.improvesHandClass) group.betterClassCards++;
+    group.defaultIncluded = group.betterClassCards > 0;
     groups.set(key, group);
   }
   return [...groups.values()].sort((a, b) => b.handRank - a.handRank || b.cards.length - a.cards.length);
+}
+
+function groupNextCardImpacts(impacts: NextCardImpact[]): LookupOutGroup[] {
+  const groups = new Map<string, LookupOutGroup>();
+  for (const impact of impacts) {
+    const key = `${impact.category}:${impact.affectedPlayerId ?? 'table'}:${impact.handClass}`;
+    const group = groups.get(key) ?? {
+      key,
+      label: impact.label,
+      note: impact.handClass,
+      handRank: impact.handRank,
+      cards: [],
+      improvingCards: 0,
+      betterClassCards: 0,
+      defaultIncluded: impact.defaultIncluded,
+      category: impact.category,
+    };
+    group.cards.push(impact.card);
+    if (impact.category === 'hero-upgrade') group.betterClassCards++;
+    else group.improvingCards++;
+    group.defaultIncluded = group.defaultIncluded || impact.defaultIncluded;
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) => {
+    const categoryOrder: Record<LookupOutGroup['category'], number> = {
+      danger: 0,
+      chop: 1,
+      'hero-upgrade': 2,
+      draw: 3,
+    };
+    return categoryOrder[a.category] - categoryOrder[b.category] || b.handRank - a.handRank || b.cards.length - a.cards.length;
+  });
+}
+
+function countUniqueCards(groups: LookupOutGroup[]): number {
+  const keys = new Set<string>();
+  for (const group of groups) {
+    for (const card of group.cards) keys.add(cardKey(card));
+  }
+  return keys.size;
+}
+
+function outGroupSubtitle(group: LookupOutGroup): string {
+  const cardCount = `${group.cards.length} card${group.cards.length === 1 ? '' : 's'}`;
+  if (group.category === 'danger') return `${cardCount} · villain can beat Hero`;
+  if (group.category === 'chop') return `${cardCount} · villain can chop`;
+  if (group.category === 'hero-upgrade') return `${cardCount} · Hero upgrades`;
+  if (group.betterClassCards > 0) return `${cardCount} · ${group.betterClassCards} upgrade class`;
+  if (group.improvingCards > 0) return `${cardCount} · ${group.improvingCards} improve`;
+  return `${cardCount} · no immediate improvement`;
+}
+
+function EquityStatButton({
+  id,
+  equity,
+  win,
+  tie,
+  expanded,
+  onToggle,
+}: {
+  id: string;
+  equity: number | null;
+  win: number | null;
+  tie: number | null;
+  expanded: boolean;
+  onToggle: (id: string) => void;
+}) {
+  const disabled = equity === null;
+  return (
+    <button
+      type="button"
+      className={`hl-equity-stat${expanded ? ' expanded' : ''}`}
+      onClick={() => !disabled && onToggle(id)}
+      disabled={disabled}
+      aria-expanded={expanded}
+    >
+      {expanded && (
+        <>
+          <span className="hl-equity-corner hl-equity-win">Win {formatPct(win)}</span>
+          <span className="hl-equity-corner hl-equity-tie">Tie {formatPct(tie)}</span>
+        </>
+      )}
+      {!expanded && (
+        <>
+          <span className="hl-equity-main">{formatPct(equity)}</span>
+          <small>Equity</small>
+        </>
+      )}
+    </button>
+  );
 }
 
 function HandPickerGrid({
@@ -171,8 +316,12 @@ interface HandLookupProps {
 export function HandLookup({ onBack }: HandLookupProps) {
   const [activeLookupTab, setActiveLookupTab] = useState<ActiveLookupTab | null>(null);
   const [expandedOutsStreet, setExpandedOutsStreet] = useState<string | null>(null);
-  const [ruledOutOutGroups, setRuledOutOutGroups] = useState<Set<string>>(() => new Set());
+  const [expandedEquityCells, setExpandedEquityCells] = useState<Set<string>>(() => new Set());
+  const [outGroupChoices, setOutGroupChoices] = useState<Record<string, boolean>>({});
   const [heroCards, setHeroCards] = useState<Card[]>([{ rank: 'A', suit: 's' }, { rank: 'K', suit: 's' }]);
+  const [opponentHands, setOpponentHands] = useState<OpponentHand[]>([
+    { id: 'villain-1', name: 'Villain 1', cards: [] },
+  ]);
   const [flopCards, setFlopCards] = useState<Card[]>([]);
   const [turnCard, setTurnCard] = useState<Card[]>([]);
   const [riverCard, setRiverCard] = useState<Card[]>([]);
@@ -182,11 +331,13 @@ export function HandLookup({ onBack }: HandLookupProps) {
   const [showGrid, setShowGrid] = useState(defaultShowGrid);
 
   const boardCards = useMemo(() => [...flopCards, ...turnCard, ...riverCard], [flopCards, riverCard, turnCard]);
+  const opponentCards = useMemo(() => opponentHands.flatMap(opponent => opponent.cards), [opponentHands]);
+  const allHoleCards = useMemo(() => [...heroCards, ...opponentCards], [heroCards, opponentCards]);
   const heroNotation = handNotationFromCards(heroCards) ?? selectedHand;
   const rank = HAND_RANK_MAP[heroNotation] ?? HAND_RANK_MAP[selectedHand] ?? null;
 
   useEffect(() => {
-    setRuledOutOutGroups(new Set());
+    setOutGroupChoices({});
   }, [heroCards, boardCards]);
 
   function handleHeroCardsChange(cards: Card[]) {
@@ -200,11 +351,43 @@ export function HandLookup({ onBack }: HandLookupProps) {
     }
   }
 
+  function updateOpponentCards(id: string, cards: Card[]) {
+    setOpponentHands(prev => prev.map(opponent => (
+      opponent.id === id ? { ...opponent, cards } : opponent
+    )));
+  }
+
+  function addOpponent() {
+    setOpponentHands(prev => {
+      if (prev.length + 1 >= MAX_PLAYERS) return prev;
+      return [
+        ...prev,
+        blankOpponent(prev.length),
+      ];
+    });
+  }
+
+  function removeOpponent(id: string) {
+    setOpponentHands(prev => {
+      const next = prev.filter(opponent => opponent.id !== id);
+      return next.length > 0 ? renumberOpponents(next) : [blankOpponent(0)];
+    });
+    setActiveLookupTab(prev => (prev === `opponent:${id}` ? null : prev));
+  }
+
+  function unavailableForOpponent(id: string): Card[] {
+    return [
+      ...heroCards,
+      ...boardCards,
+      ...opponentHands.filter(opponent => opponent.id !== id).flatMap(opponent => opponent.cards),
+    ];
+  }
+
   function selectFromGrid(hand: string) {
     setSelectedHand(hand);
     setTextInput(hand);
     setTextError(false);
-    const exactCards = cardsForHandNotation(hand, boardCards);
+    const exactCards = cardsForHandNotation(hand, [...boardCards, ...opponentCards]);
     if (exactCards) {
       setHeroCards(exactCards);
       setActiveLookupTab(null);
@@ -217,7 +400,7 @@ export function HandLookup({ onBack }: HandLookupProps) {
     if (parsed) {
       setSelectedHand(parsed);
       setTextError(false);
-      const exactCards = cardsForHandNotation(parsed, boardCards);
+      const exactCards = cardsForHandNotation(parsed, [...boardCards, ...opponentCards]);
       if (exactCards) setHeroCards(exactCards);
     } else if (value.trim() === '') {
       setTextError(false);
@@ -259,12 +442,24 @@ export function HandLookup({ onBack }: HandLookupProps) {
     return `${street}:${groupKey}`;
   }
 
-  function toggleRuledOutGroup(street: string, groupKey: string) {
-    const key = outGroupKey(street, groupKey);
-    setRuledOutOutGroups(prev => {
+  function isOutGroupSelected(street: string, group: { key: string; defaultIncluded: boolean }): boolean {
+    const key = outGroupKey(street, group.key);
+    return outGroupChoices[key] ?? group.defaultIncluded;
+  }
+
+  function toggleOutGroup(street: string, group: { key: string; defaultIncluded: boolean }) {
+    const key = outGroupKey(street, group.key);
+    setOutGroupChoices(prev => ({
+      ...prev,
+      [key]: !(prev[key] ?? group.defaultIncluded),
+    }));
+  }
+
+  function toggleEquityCell(id: string) {
+    setExpandedEquityCells(prev => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
@@ -273,14 +468,28 @@ export function HandLookup({ onBack }: HandLookupProps) {
     () => analyzeHoldemScenario(heroCards, boardCards),
     [boardCards, heroCards],
   );
+  const exactPlayers = useMemo(
+    () => [{ id: 'hero', name: 'Hero', cards: heroCards }, ...opponentHands],
+    [heroCards, opponentHands],
+  );
+  const showdownEquity = useMemo(
+    () => calculateSpecificHoldemEquity(exactPlayers, boardCards),
+    [boardCards, exactPlayers],
+  );
 
   const completeHero = heroCards.length === 2;
   const heroSummary = completeHero ? handLabel(heroCards[0], heroCards[1]) : 'Choose two cards';
   const latestAvailable = [...streetStats].reverse().find(stats => stats.available) ?? streetStats[0];
-  const activeLookupMeta = activeLookupTab ? LOOKUP_TABS.find(tab => tab.id === activeLookupTab) : null;
+  const activeOpponentId = activeLookupTab?.startsWith('opponent:') ? activeLookupTab.replace('opponent:', '') : null;
+  const activeOpponent = activeOpponentId ? opponentHands.find(opponent => opponent.id === activeOpponentId) : null;
+  const activeLookupMeta = activeOpponent
+    ? { label: activeOpponent.name, helper: 'Pick this opponent\'s exact two hole cards.' }
+    : activeLookupTab ? LOOKUP_TABS.find(tab => tab.id === activeLookupTab) : null;
+  const heroShowdown = showdownEquity.players.find(player => player.id === 'hero');
+  const completeOpponentCount = opponentHands.filter(opponent => opponent.cards.length === 2).length;
 
-  const turnUnavailable = [...heroCards, ...flopCards, ...riverCard];
-  const riverUnavailable = [...heroCards, ...flopCards, ...turnCard];
+  const turnUnavailable = [...allHoleCards, ...flopCards, ...riverCard];
+  const riverUnavailable = [...allHoleCards, ...flopCards, ...turnCard];
 
   return (
     <div className="hl-wrapper">
@@ -356,8 +565,52 @@ export function HandLookup({ onBack }: HandLookupProps) {
                 </button>
               </div>
               <div className="hl-equity-big">
-                <span>{formatPct(latestAvailable.equityPct)}</span>
-                <small>{latestAvailable.label} equity</small>
+                  <span>{formatPct(latestAvailable.equityPct)}</span>
+                <small>{latestAvailable.label} equity vs random hand</small>
+              </div>
+            </div>
+
+            <div className="hl-opponents-card">
+              <div className="hl-opponents-head">
+                <div>
+                  <h4>Exact Opponents</h4>
+                  <span>{pluralize(completeOpponentCount, 'complete opponent')} in the equity calc</span>
+                </div>
+                <button
+                  type="button"
+                  className="hl-inline-btn"
+                  onClick={addOpponent}
+                  disabled={opponentHands.length + 1 >= MAX_PLAYERS}
+                >
+                  Add player
+                </button>
+              </div>
+              <div className="hl-opponents-list">
+                {opponentHands.map(opponent => (
+                  <div key={opponent.id} className="hl-opponent-row">
+                    <button
+                      type="button"
+                      className={`hl-opponent-edit${activeLookupTab === `opponent:${opponent.id}` ? ' active' : ''}`}
+                      onClick={() => setActiveLookupTab(activeLookupTab === `opponent:${opponent.id}` ? null : `opponent:${opponent.id}`)}
+                      aria-expanded={activeLookupTab === `opponent:${opponent.id}`}
+                    >
+                      <span>{opponent.name}</span>
+                      <CardSlotStrip cards={opponent.cards} slots={2} />
+                      <small>{opponent.cards.length === 2 ? handLabel(opponent.cards[0], opponent.cards[1]) : `${opponent.cards.length}/2 cards`}</small>
+                    </button>
+                    <button
+                      type="button"
+                      className="hl-opponent-remove"
+                      onClick={event => {
+                        event.stopPropagation();
+                        removeOpponent(opponent.id);
+                      }}
+                      aria-label={`Remove ${opponent.name}`}
+                    >
+                      X
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -395,7 +648,7 @@ export function HandLookup({ onBack }: HandLookupProps) {
                     onChange={handleHeroCardsChange}
                     maxCards={2}
                     label="Exact cards"
-                    unavailableCards={boardCards}
+                    unavailableCards={[...boardCards, ...opponentCards]}
                   />
 
                   <div className="hl-text-input-row">
@@ -445,7 +698,7 @@ export function HandLookup({ onBack }: HandLookupProps) {
                   onChange={handleFlopCardsChange}
                   maxCards={3}
                   label="Flop"
-                  unavailableCards={[...heroCards, ...turnCard, ...riverCard]}
+                  unavailableCards={[...allHoleCards, ...turnCard, ...riverCard]}
                 />
               )}
 
@@ -475,7 +728,17 @@ export function HandLookup({ onBack }: HandLookupProps) {
                   onChange={handleBoardCardsChange}
                   maxCards={5}
                   label="Full board"
-                  unavailableCards={heroCards}
+                  unavailableCards={allHoleCards}
+                />
+              )}
+
+              {activeOpponent && (
+                <CardPicker
+                  value={activeOpponent.cards}
+                  onChange={cards => updateOpponentCards(activeOpponent.id, cards)}
+                  maxCards={2}
+                  label={`${activeOpponent.name} cards`}
+                  unavailableCards={unavailableForOpponent(activeOpponent.id)}
                 />
               )}
             </div>
@@ -486,15 +749,86 @@ export function HandLookup({ onBack }: HandLookupProps) {
 
         <div className="hl-results">
           <div className="hl-street-table-wrap">
+            <div className="hl-grid-label">By-river odds vs exact hands</div>
+            <div className="hl-showdown-summary">
+              <div>
+                <span className="hl-showdown-primary">
+                  {showdownEquity.available && heroShowdown ? formatPct(heroShowdown.equityPct) : '-'}
+                </span>
+                <small>Hero equity</small>
+              </div>
+              <div>
+                <span>{formatRunouts(showdownEquity.samples, showdownEquity.exact)}</span>
+                <small>{showdownEquity.missingBoardCards} board card{showdownEquity.missingBoardCards === 1 ? '' : 's'} to come</small>
+              </div>
+            </div>
+            {showdownEquity.error && (
+              <div className="hl-showdown-empty">{showdownEquity.error}</div>
+            )}
+            {showdownEquity.available && (
+              <div className="hl-showdown-table">
+                <div className="hl-showdown-column-heads">
+                  <span>Player</span>
+                  <span>Equity</span>
+                  <span className="hl-showdown-lose-head">
+                    Lose
+                    <button
+                      type="button"
+                      className="hl-info-toast-trigger"
+                      aria-label="Equity and lose percentage explanation"
+                    >
+                      i
+                    </button>
+                    <span className="hl-info-toast" role="tooltip">
+                      Equity is expected pot share: wins plus your share of chops. Lose is the runouts where this player gets no part of the pot.
+                    </span>
+                  </span>
+                </div>
+                {showdownEquity.players.map(player => (
+                  <div key={player.id} className={`hl-showdown-row${player.id === 'hero' ? ' hero' : ''}`}>
+                    <div className="hl-showdown-player">
+                      <strong>{player.name}</strong>
+                      <span>{player.cards.length === 2 ? handLabel(player.cards[0], player.cards[1]) : 'Incomplete'}</span>
+                    </div>
+                    <div className="hl-stat-cell primary">
+                      <EquityStatButton
+                        id={`showdown:${player.id}`}
+                        equity={player.equityPct}
+                        win={player.winPct}
+                        tie={player.tiePct}
+                        expanded={expandedEquityCells.has(`showdown:${player.id}`)}
+                        onToggle={toggleEquityCell}
+                      />
+                    </div>
+                    <div className="hl-stat-cell hl-lose-cell">
+                      <span>{formatPct(player.lossPct)}</span>
+                      <small>Lose</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="hl-street-table-wrap">
             <div className="hl-grid-label">Street-by-street statistics vs one random hand</div>
             <div className="hl-street-table">
               {streetStats.map(stats => {
                 const outsExpanded = expandedOutsStreet === stats.street;
-                const outsClickable = stats.outDetails.length > 0;
-                const outGroups = groupOutDetails(stats.outDetails);
-                const liveOutGroups = outGroups.filter(group => !ruledOutOutGroups.has(outGroupKey(stats.street, group.key)));
-                const liveOutCount = liveOutGroups.reduce((sum, group) => sum + group.cards.length, 0);
-                const hasRuledOuts = liveOutCount !== stats.outDetails.length;
+                const impactResult = analyzeNextCardImpacts(heroCards, opponentHands, stats.board);
+                const useImpactMode = stats.available && impactResult.available && impactResult.currentHeroHandRank >= 1;
+                const outGroups = useImpactMode ? groupNextCardImpacts(impactResult.impacts) : groupOutDetails(stats.outDetails);
+                const selectedOutGroups = outGroups.filter(group => isOutGroupSelected(stats.street, group));
+                const selectedOutCount = countUniqueCards(selectedOutGroups);
+                const possibleOutCount = useImpactMode ? impactResult.totalNextCards : countUniqueCards(outGroups);
+                const outsClickable = outGroups.length > 0;
+                const outsLabel = useImpactMode ? 'Impact cards' : 'Selected outs';
+                const outsPanelTitle = useImpactMode
+                  ? `${impactResult.nextStreetLabel ?? 'Next'} card impact`
+                  : 'Possible next-card hands';
+                const outsPanelHelper = useImpactMode
+                  ? 'Tap a group to include or exclude those impact cards.'
+                  : 'Tap a hand class to count those cards as outs.';
                 return (
                   <div key={stats.street} className="hl-street-block">
                     <div className={`hl-street-row${stats.available ? '' : ' pending'}`}>
@@ -503,16 +837,14 @@ export function HandLookup({ onBack }: HandLookupProps) {
                         <span>{formatSamples(stats)}</span>
                       </div>
                       <div className="hl-stat-cell primary">
-                        <span>{formatPct(stats.equityPct)}</span>
-                        <small>Equity</small>
-                      </div>
-                      <div className="hl-stat-cell">
-                        <span>{formatPct(stats.winPct)}</span>
-                        <small>Win</small>
-                      </div>
-                      <div className="hl-stat-cell">
-                        <span>{formatPct(stats.tiePct)}</span>
-                        <small>Tie</small>
+                        <EquityStatButton
+                          id={`street:${stats.street}`}
+                          equity={stats.equityPct}
+                          win={stats.winPct}
+                          tie={stats.tiePct}
+                          expanded={expandedEquityCells.has(`street:${stats.street}`)}
+                          onToggle={toggleEquityCell}
+                        />
                       </div>
                       <div className="hl-stat-cell">
                         <button
@@ -523,14 +855,20 @@ export function HandLookup({ onBack }: HandLookupProps) {
                           aria-expanded={outsExpanded}
                         >
                           <span>
-                            {stats.outs === null ? '-' : hasRuledOuts ? `${liveOutCount}/${stats.outs}` : stats.outs}
+                            {stats.outs === null ? '-' : `${selectedOutCount}/${possibleOutCount}`}
                           </span>
-                          <small>{hasRuledOuts ? 'Live outs' : 'Outs'}</small>
+                          <small>{outsLabel}</small>
                         </button>
                       </div>
                       <div className="hl-street-detail">
                         <strong>{stats.madeHand}</strong>
-                        <span>{stats.drawSummary}</span>
+                        <span>
+                          {useImpactMode
+                            ? impactResult.impacts.length > 0
+                              ? `${countUniqueCards(groupNextCardImpacts(impactResult.impacts))} ${impactResult.nextStreetLabel?.toLowerCase() ?? 'next'} cards can change the exact-villain outcome`
+                              : `No ${impactResult.nextStreetLabel?.toLowerCase() ?? 'next'} cards change the exact-villain outcome`
+                            : stats.drawSummary}
+                        </span>
                         {stats.boardTexture.length > 0 && (
                           <div className="hl-texture-tags">
                             {stats.boardTexture.map(label => <span key={label}>{label}</span>)}
@@ -540,33 +878,33 @@ export function HandLookup({ onBack }: HandLookupProps) {
                     </div>
                     {outsExpanded && (
                       <div className="hl-outs-detail">
+                        <div className="hl-outs-detail-head">
+                          <strong>{outsPanelTitle}</strong>
+                          <span>{outsPanelHelper}</span>
+                        </div>
                         {outGroups.map(group => (
-                          <div
+                          <button
+                            type="button"
                             key={group.key}
-                            className={`hl-outs-group${ruledOutOutGroups.has(outGroupKey(stats.street, group.key)) ? ' ruled-out' : ''}`}
+                            className={`hl-outs-group${isOutGroupSelected(stats.street, group) ? ' selected' : ''}`}
+                            onClick={() => toggleOutGroup(stats.street, group)}
+                            aria-pressed={isOutGroupSelected(stats.street, group)}
                           >
                             <div className="hl-outs-group-head">
                               <div>
                                 <div className="hl-outs-group-title">{group.label}</div>
-                                <div className="hl-outs-group-subtitle">{group.note} · {group.cards.length} card{group.cards.length === 1 ? '' : 's'}</div>
+                                <div className="hl-outs-group-subtitle">{outGroupSubtitle(group)}</div>
                               </div>
-                              <button
-                                type="button"
-                                className="hl-outs-ruleout"
-                                onClick={() => toggleRuledOutGroup(stats.street, group.key)}
-                                aria-label={ruledOutOutGroups.has(outGroupKey(stats.street, group.key))
-                                  ? `Restore ${group.label} outs`
-                                  : `Rule out ${group.label} as a viable winning hand`}
-                              >
-                                {ruledOutOutGroups.has(outGroupKey(stats.street, group.key)) ? 'Undo' : 'X'}
-                              </button>
+                              <span className="hl-outs-selected-mark">
+                                {isOutGroupSelected(stats.street, group) ? 'Included' : 'Excluded'}
+                              </span>
                             </div>
                             <div className="hl-outs-cards">
                               {group.cards.map(card => (
                                 <PlayingCard key={cardKey(card)} card={card} size="sm" />
                               ))}
                             </div>
-                          </div>
+                          </button>
                         ))}
                       </div>
                     )}

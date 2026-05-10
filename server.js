@@ -19,6 +19,7 @@
 import express from 'express';
 import session from 'express-session';
 import bcrypt from 'bcryptjs';
+import { createPublicKey, createVerify, randomUUID } from 'crypto';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -29,19 +30,267 @@ const PORT = process.env.PORT || 3001;
 const isProd = process.env.NODE_ENV === 'production';
 const dbConfigured = Boolean(process.env.DATABASE_URL);
 const skipSchemaInit = process.env.SKIP_SCHEMA_INIT === 'true';
+const cloudflareAccessEnabled = process.env.CLOUDFLARE_ACCESS_ENABLED === 'true';
+const cloudflareAccessTeamDomain = (process.env.CLOUDFLARE_ACCESS_TEAM_DOMAIN ?? '').replace(/\/$/, '');
+const cloudflareAccessAud = process.env.CLOUDFLARE_ACCESS_AUD ?? '';
 
 const BCRYPT_ROUNDS = 12;
 const USER_TIERS = new Set(['user', 'gold', 'platinum', 'diamond']);
+const USER_ROLES = new Set(['user', 'admin']);
+const TIER_RANK = {
+  user: 0,
+  gold: 1,
+  platinum: 2,
+  diamond: 3,
+};
+
+function parseEmailList(value) {
+  return new Set(
+    (value ?? '')
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+const ADMIN_EMAILS = parseEmailList(process.env.ADMIN_EMAILS);
+const BUG_NOTIFICATION_EMAILS = parseEmailList(process.env.BUG_NOTIFICATION_EMAILS || process.env.ADMIN_EMAILS);
+const WELCOME_FROM_EMAIL = process.env.WELCOME_FROM_EMAIL || process.env.NOTIFICATION_FROM_EMAIL;
 
 function normalizeUserTier(tier) {
   return USER_TIERS.has(tier) ? tier : 'user';
 }
 
-function serializeUser(user) {
+function maxTier(a, b) {
+  const left = normalizeUserTier(a);
+  const right = normalizeUserTier(b);
+  return TIER_RANK[right] > TIER_RANK[left] ? right : left;
+}
+
+function normalizeUserRole(role) {
+  return USER_ROLES.has(role) ? role : 'user';
+}
+
+function normalizeEmail(email) {
+  if (typeof email !== 'string') return null;
+  const normalized = email.trim().toLowerCase();
+  return normalized || null;
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function resolveUserRole(user) {
+  return normalizeUserRole(user.role);
+}
+
+function normalizePromoCode(code) {
+  if (typeof code !== 'string') return '';
+  return code.trim().toUpperCase();
+}
+
+function isValidPromoCode(code) {
+  return /^[A-Z0-9_-]{3,32}$/.test(code);
+}
+
+function addDays(date, days) {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+// ── Cloudflare Access auth ──────────────────────────────────────────────────
+
+let cloudflareJwksCache = { expiresAt: 0, keys: [] };
+
+function base64UrlToBuffer(value) {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
+  return Buffer.from(padded, 'base64');
+}
+
+function base64UrlJson(value) {
+  return JSON.parse(base64UrlToBuffer(value).toString('utf8'));
+}
+
+function getCloudflareAccessToken(req) {
+  const assertion = req.get('cf-access-jwt-assertion');
+  if (assertion) return assertion;
+  const cookie = req.get('cookie') ?? '';
+  const authCookie = cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('CF_Authorization='));
+  return authCookie ? decodeURIComponent(authCookie.slice('CF_Authorization='.length)) : null;
+}
+
+async function getCloudflareAccessKeys() {
+  const now = Date.now();
+  if (cloudflareJwksCache.keys.length > 0 && cloudflareJwksCache.expiresAt > now) {
+    return cloudflareJwksCache.keys;
+  }
+  if (!cloudflareAccessTeamDomain) {
+    throw new Error('CLOUDFLARE_ACCESS_TEAM_DOMAIN is required when Cloudflare Access auth is enabled');
+  }
+
+  const response = await fetch(`${cloudflareAccessTeamDomain}/cdn-cgi/access/certs`);
+  if (!response.ok) {
+    throw new Error(`Failed to load Cloudflare Access certs: HTTP ${response.status}`);
+  }
+  const body = await response.json();
+  cloudflareJwksCache = {
+    expiresAt: now + 60 * 60 * 1000,
+    keys: Array.isArray(body.keys) ? body.keys : [],
+  };
+  return cloudflareJwksCache.keys;
+}
+
+function verifyRs256JwtSignature(token, jwk) {
+  const [headerSegment, payloadSegment, signatureSegment] = token.split('.');
+  const verifier = createVerify('RSA-SHA256');
+  verifier.update(`${headerSegment}.${payloadSegment}`);
+  verifier.end();
+  const publicKey = createPublicKey({ key: jwk, format: 'jwk' });
+  return verifier.verify(publicKey, base64UrlToBuffer(signatureSegment));
+}
+
+async function verifyCloudflareAccessJwt(req) {
+  if (!cloudflareAccessEnabled) return null;
+  if (!cloudflareAccessTeamDomain || !cloudflareAccessAud) {
+    throw new Error('CLOUDFLARE_ACCESS_TEAM_DOMAIN and CLOUDFLARE_ACCESS_AUD are required when Cloudflare Access auth is enabled');
+  }
+
+  const token = getCloudflareAccessToken(req);
+  if (!token) return null;
+  const segments = token.split('.');
+  if (segments.length !== 3) throw new Error('Invalid Cloudflare Access JWT');
+
+  const header = base64UrlJson(segments[0]);
+  const payload = base64UrlJson(segments[1]);
+  if (header.alg !== 'RS256' || !header.kid) throw new Error('Unsupported Cloudflare Access JWT');
+
+  const keys = await getCloudflareAccessKeys();
+  const jwk = keys.find((key) => key.kid === header.kid);
+  if (!jwk || !verifyRs256JwtSignature(token, jwk)) {
+    throw new Error('Cloudflare Access JWT signature verification failed');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const issuer = typeof payload.iss === 'string' ? payload.iss.replace(/\/$/, '') : '';
+  const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (issuer !== cloudflareAccessTeamDomain) throw new Error('Cloudflare Access JWT issuer mismatch');
+  if (!audiences.includes(cloudflareAccessAud)) {
+    throw new Error('Cloudflare Access JWT audience mismatch');
+  }
+  if (payload.exp && payload.exp <= now) throw new Error('Cloudflare Access JWT expired');
+  if (payload.nbf && payload.nbf > now) throw new Error('Cloudflare Access JWT not yet valid');
+  if (payload.type && payload.type !== 'app') throw new Error('Cloudflare Access JWT is not an application token');
+
+  const email = normalizeEmail(payload.email);
+  if (!email || !isValidEmail(email)) throw new Error('Cloudflare Access JWT is missing a valid email');
+  return { email, subject: payload.sub ?? null };
+}
+
+function usernameBaseFromEmail(email) {
+  const localPart = email.split('@')[0] ?? 'user';
+  const normalized = localPart.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return (normalized || 'user').slice(0, 24);
+}
+
+async function findOrCreateCloudflareAccessUser(identity) {
+  const email = identity.email;
+  const role = ADMIN_EMAILS.has(email) ? 'admin' : 'user';
+  const { rows: existing } = await pool.query(
+    'SELECT id, username, email, role, membership_tier, created_at FROM users WHERE email = $1',
+    [email]
+  );
+  if (existing[0]) {
+    if (existing[0].role !== role && role === 'admin') {
+      const { rows } = await pool.query(
+        `UPDATE users SET role = 'admin'
+         WHERE id = $1
+         RETURNING id, username, email, role, membership_tier, created_at`,
+        [existing[0].id]
+      );
+      return rows[0];
+    }
+    return existing[0];
+  }
+
+  const base = usernameBaseFromEmail(email);
+  const hash = await bcrypt.hash(randomUUID(), BCRYPT_ROUNDS);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const suffix = attempt === 0 ? '' : `-${attempt + 1}`;
+    const username = `${base}${suffix}`.slice(0, 30);
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO users (username, email, password_hash, role)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, username, email, role, membership_tier, created_at`,
+        [username, email, hash, role]
+      );
+      await sendWelcomeEmail(rows[0]);
+      return rows[0];
+    } catch (err) {
+      if (err.code !== '23505') throw err;
+    }
+  }
+  throw new Error('Failed to create a unique username for Cloudflare Access user');
+}
+
+async function setSessionUser(req, user) {
+  const serialized = await serializeUser(user);
+  req.session.userId = user.id;
+  req.session.username = user.username;
+  req.session.email = user.email ?? null;
+  req.session.membershipTier = serialized.tier;
+  req.session.role = resolveUserRole(user);
+  return serialized;
+}
+
+async function authenticateCloudflareAccess(req) {
+  const identity = await verifyCloudflareAccessJwt(req);
+  if (!identity) return null;
+  const user = await findOrCreateCloudflareAccessUser(identity);
+  return setSessionUser(req, user);
+}
+
+async function getActivePromo(userId, db = pool) {
+  const { rows } = await db.query(
+    `SELECT pc.code, pr.tier, pr.redeemed_at, pr.expires_at
+     FROM promo_redemptions pr
+     JOIN promo_codes pc ON pc.id = pr.promo_code_id
+     WHERE pr.user_id = $1
+       AND pr.expires_at > NOW()
+     ORDER BY
+       CASE pr.tier
+         WHEN 'diamond' THEN 3
+         WHEN 'platinum' THEN 2
+         WHEN 'gold' THEN 1
+         ELSE 0
+       END DESC,
+       pr.expires_at DESC
+     LIMIT 1`,
+    [userId]
+  );
+  return rows[0] ?? null;
+}
+
+async function serializeUser(user, db = pool) {
+  const membershipTier = normalizeUserTier(user.membership_tier);
+  const activePromo = user.id ? await getActivePromo(user.id, db) : null;
+  const effectiveTier = activePromo ? maxTier(membershipTier, activePromo.tier) : membershipTier;
   return {
     id: user.id,
     username: user.username,
-    tier: normalizeUserTier(user.membership_tier),
+    email: user.email ?? null,
+    tier: effectiveTier,
+    membershipTier,
+    activePromo: activePromo ? {
+      code: activePromo.code,
+      tier: normalizeUserTier(activePromo.tier),
+      redeemedAt: activePromo.redeemed_at,
+      expiresAt: activePromo.expires_at,
+    } : null,
+    role: resolveUserRole(user),
     createdAt: user.created_at,
   };
 }
@@ -183,52 +432,310 @@ async function requireDb(req, res, next) {
   next();
 }
 
-function requireAuth(req, res, next) {
-  if (!req.session.userId) {
+async function requireAuth(req, res, next) {
+  if (req.session.userId) {
+    next();
+    return;
+  }
+  try {
+    const user = await authenticateCloudflareAccess(req);
+    if (!user) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+    next();
+  } catch (err) {
+    console.warn('[auth] Cloudflare Access auth failed:', err.message);
     return res.status(401).json({ error: 'Not authenticated' });
   }
-  next();
 }
+
+async function requireAdmin(req, res, next) {
+  if (normalizeUserRole(req.session.role) !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  try {
+    const { rows } = await pool.query('SELECT role FROM users WHERE id = $1', [req.session.userId]);
+    if (normalizeUserRole(rows[0]?.role) !== 'admin') {
+      req.session.role = 'user';
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    next();
+  } catch (err) {
+    console.warn('[auth] admin role refresh failed:', err.message);
+    return res.status(500).json({ error: 'Failed to verify admin access' });
+  }
+}
+
+async function redeemPromoCode(userId, rawCode, db = pool) {
+  const code = normalizePromoCode(rawCode);
+  if (!isValidPromoCode(code)) {
+    const err = new Error('Promo code must be 3–32 letters, numbers, hyphens, or underscores');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const { rows } = await db.query(
+    `SELECT pc.*,
+            (SELECT COUNT(*)::int FROM promo_redemptions pr WHERE pr.promo_code_id = pc.id) AS redeemed_count
+     FROM promo_codes pc
+     WHERE pc.code = $1
+     FOR UPDATE`,
+    [code]
+  );
+  const promo = rows[0];
+  if (!promo) {
+    const err = new Error('Promo code not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!promo.active) {
+    const err = new Error('Promo code is no longer active');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (promo.expires_at && new Date(promo.expires_at) <= new Date()) {
+    const err = new Error('Promo code has expired');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (promo.max_redemptions !== null && promo.redeemed_count >= promo.max_redemptions) {
+    const err = new Error('Promo code has reached its redemption limit');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const expiresAt = addDays(new Date(), promo.duration_days);
+  try {
+    const { rows: redemptionRows } = await db.query(
+      `INSERT INTO promo_redemptions (user_id, promo_code_id, tier, expires_at)
+       VALUES ($1, $2, $3, $4)
+       RETURNING tier, redeemed_at, expires_at`,
+      [userId, promo.id, normalizeUserTier(promo.tier), expiresAt]
+    );
+    return {
+      code: promo.code,
+      tier: normalizeUserTier(redemptionRows[0].tier),
+      redeemedAt: redemptionRows[0].redeemed_at,
+      expiresAt: redemptionRows[0].expires_at,
+    };
+  } catch (err) {
+    if (err.code === '23505') {
+      const duplicate = new Error('Promo code has already been used on this account');
+      duplicate.statusCode = 400;
+      throw duplicate;
+    }
+    throw err;
+  }
+}
+
+// ── Admin notifications ─────────────────────────────────────────────────────
+
+function notificationRecipients() {
+  return [...BUG_NOTIFICATION_EMAILS];
+}
+
+function trimText(value, maxLength = 5000) {
+  if (typeof value !== 'string') return '';
+  return value.trim().slice(0, maxLength);
+}
+
+async function notifyAdmins(subject, text) {
+  const recipients = notificationRecipients();
+  if (recipients.length === 0) {
+    console.warn('[admin-notify] no BUG_NOTIFICATION_EMAILS or ADMIN_EMAILS configured');
+    return { sent: false, reason: 'no_recipients' };
+  }
+
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.NOTIFICATION_FROM_EMAIL;
+  if (!apiKey || !from) {
+    console.warn(`[admin-notify] ${subject}\nRecipients: ${recipients.join(', ')}\n${text}`);
+    return { sent: false, reason: 'email_provider_not_configured' };
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: recipients,
+      subject,
+      text,
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => '');
+    throw new Error(`Resend failed with HTTP ${response.status}: ${details}`);
+  }
+
+  return { sent: true };
+}
+
+async function sendEmail({ to, subject, text, html }) {
+  const recipients = Array.isArray(to) ? to : [to];
+  const cleanRecipients = recipients.map(normalizeEmail).filter(Boolean);
+  if (cleanRecipients.length === 0) {
+    return { sent: false, reason: 'no_recipients' };
+  }
+
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey || !WELCOME_FROM_EMAIL) {
+    console.warn(`[email] ${subject}\nRecipients: ${cleanRecipients.join(', ')}\n${text}`);
+    return { sent: false, reason: 'email_provider_not_configured' };
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: WELCOME_FROM_EMAIL,
+      to: cleanRecipients,
+      subject,
+      text,
+      ...(html ? { html } : {}),
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => '');
+    throw new Error(`Resend failed with HTTP ${response.status}: ${details}`);
+  }
+
+  return { sent: true };
+}
+
+async function sendWelcomeEmail(user) {
+  const email = normalizeEmail(user.email);
+  if (!email) return { sent: false, reason: 'no_email' };
+  const username = user.username;
+  try {
+    return await sendEmail({
+      to: email,
+      subject: 'Welcome to GTO Training',
+      text: [
+        `Thanks for signing up for GTO Training, ${username}!`,
+        '',
+        `Your username is: ${username}`,
+        '',
+        'You can use your account to save progress, redeem promo codes, and access the tools available to your tier.',
+      ].join('\n'),
+      html: [
+        `<p>Thanks for signing up for GTO Training, <strong>${username}</strong>!</p>`,
+        `<p>Your username is: <strong>${username}</strong></p>`,
+        '<p>You can use your account to save progress, redeem promo codes, and access the tools available to your tier.</p>',
+      ].join(''),
+    });
+  } catch (err) {
+    console.warn('[email] welcome email failed:', err.message);
+    return { sent: false, reason: 'send_failed' };
+  }
+}
+
+// ── Bug reports ──────────────────────────────────────────────────────────────
+
+app.post('/api/bug-reports', async (req, res) => {
+  try {
+    const message = trimText(req.body?.message);
+    if (message.length < 3) {
+      return res.status(400).json({ error: 'Bug report message required' });
+    }
+
+    const pathName = trimText(req.body?.path, 500) || 'Unknown page';
+    const source = trimText(req.body?.source, 200) || 'app';
+    const metadata = req.body?.metadata && typeof req.body.metadata === 'object'
+      ? JSON.stringify(req.body.metadata, null, 2).slice(0, 5000)
+      : '';
+    const reporter = req.session?.userId
+      ? `${req.session.username ?? 'user'} (#${req.session.userId})`
+      : 'Anonymous';
+
+    const body = [
+      `Reporter: ${reporter}`,
+      `Source: ${source}`,
+      `Path: ${pathName}`,
+      '',
+      message,
+      metadata ? `\nMetadata:\n${metadata}` : '',
+    ].join('\n');
+
+    const result = await notifyAdmins('[GTO Training] Bug report', body);
+    res.status(202).json({
+      ok: true,
+      notified: result.sent,
+      recipientsConfigured: notificationRecipients().length > 0,
+    });
+  } catch (err) {
+    console.error('[bug-reports] notify error:', err);
+    res.status(500).json({ error: 'Failed to submit bug report' });
+  }
+});
 
 // ── Auth routes ───────────────────────────────────────────────────────────────
 
 app.post('/api/auth/register', requireDb, async (req, res) => {
+  const client = await pool.connect();
   try {
     const { username, password } = req.body ?? {};
+    const email = normalizeEmail(req.body?.email);
+    const promoCode = normalizePromoCode(req.body?.promoCode);
     if (!username || !/^[a-z0-9_-]{3,30}$/.test(username)) {
       return res.status(400).json({
         error: 'Username must be 3–30 lowercase characters: letters, numbers, hyphens, underscores',
       });
     }
+    if (email && !isValidEmail(email)) {
+      return res.status(400).json({ error: 'Email must be a valid address' });
+    }
     if (!password || password.length < 8) {
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
+    if (promoCode && !isValidPromoCode(promoCode)) {
+      return res.status(400).json({ error: 'Promo code must be 3–32 letters, numbers, hyphens, or underscores' });
+    }
 
-    const { rows: existing } = await pool.query(
-      'SELECT id FROM users WHERE username = $1',
-      [username]
+    await client.query('BEGIN');
+
+    const { rows: existing } = await client.query(
+      'SELECT id FROM users WHERE username = $1 OR ($2::text IS NOT NULL AND email = $2)',
+      [username, email]
     );
     if (existing.length > 0) {
-      return res.status(400).json({ error: 'Username already taken' });
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Username or email already taken' });
     }
 
     const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const { rows } = await pool.query(
-      'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, membership_tier, created_at',
-      [username, hash]
+    const role = 'user';
+    const { rows } = await client.query(
+      `INSERT INTO users (username, password_hash, email, role)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, username, email, role, membership_tier, created_at`,
+      [username, hash, email, role]
     );
     const user = rows[0];
-
-    req.session.userId = user.id;
-    req.session.username = user.username;
-    req.session.membershipTier = normalizeUserTier(user.membership_tier);
+    if (promoCode) {
+      await redeemPromoCode(user.id, promoCode, client);
+    }
+    await client.query('COMMIT');
+    await sendWelcomeEmail(user);
+    const serialized = await setSessionUser(req, user);
 
     res.status(201).json({
-      user: serializeUser(user),
+      user: serialized,
     });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('[auth] register error:', err);
-    res.status(500).json({ error: 'Registration failed' });
+    res.status(err.statusCode ?? 500).json({ error: err.statusCode ? err.message : 'Registration failed' });
+  } finally {
+    client.release();
   }
 });
 
@@ -250,11 +757,9 @@ app.post('/api/auth/login', requireDb, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    req.session.userId = user.id;
-    req.session.username = user.username;
-    req.session.membershipTier = normalizeUserTier(user.membership_tier);
+    const serialized = await setSessionUser(req, user);
 
-    res.json({ user: serializeUser(user) });
+    res.json({ user: serialized });
   } catch (err) {
     console.error('[auth] login error:', err);
     res.status(500).json({ error: 'Login failed' });
@@ -270,30 +775,141 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/auth/me', async (req, res) => {
-  if (!req.session.userId) return res.json({ user: null });
+  if (!req.session.userId) {
+    if (!dbConfigured || !pool) return res.json({ user: null });
+    const ok = await checkDbHealth(pool);
+    if (!ok) return res.json({ user: null });
+    try {
+      const user = await authenticateCloudflareAccess(req);
+      return res.json({ user });
+    } catch (err) {
+      console.warn('[auth] Cloudflare Access session restore failed:', err.message);
+      return res.json({ user: null });
+    }
+  }
+  let currentUser = null;
   if (dbConfigured && pool) {
     const ok = await checkDbHealth(pool);
     if (ok) {
       try {
         const { rows } = await pool.query(
-          'SELECT membership_tier FROM users WHERE id = $1',
+          'SELECT id, username, email, role, membership_tier, created_at FROM users WHERE id = $1',
           [req.session.userId]
         );
         if (rows[0]) {
-          req.session.membershipTier = normalizeUserTier(rows[0].membership_tier);
+          const serialized = await serializeUser(rows[0]);
+          currentUser = serialized;
+          req.session.username = rows[0].username;
+          req.session.membershipTier = serialized.tier;
+          req.session.email = rows[0].email ?? null;
+          req.session.role = resolveUserRole(rows[0]);
         }
       } catch (err) {
         console.warn('[auth] failed to refresh membership tier:', err.message);
       }
     }
   }
+  if (currentUser) {
+    return res.json({ user: currentUser });
+  }
   res.json({
     user: {
       id: req.session.userId,
       username: req.session.username,
+      email: req.session.email ?? null,
       tier: normalizeUserTier(req.session.membershipTier),
+      membershipTier: normalizeUserTier(req.session.membershipTier),
+      activePromo: null,
+      role: normalizeUserRole(req.session.role),
     },
   });
+});
+
+// ── Account routes ───────────────────────────────────────────────────────────
+
+app.post('/api/account/promo-code', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const redemption = await redeemPromoCode(req.session.userId, req.body?.code, client);
+    await client.query('COMMIT');
+
+    const { rows } = await pool.query(
+      'SELECT id, username, email, role, membership_tier, created_at FROM users WHERE id = $1',
+      [req.session.userId]
+    );
+    const user = await serializeUser(rows[0]);
+    req.session.membershipTier = user.tier;
+    res.status(201).json({ user, redemption });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[promo] redeem error:', err);
+    res.status(err.statusCode ?? 500).json({ error: err.statusCode ? err.message : 'Failed to redeem promo code' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/admin/promo-codes', requireDb, requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT pc.id, pc.code, pc.tier, pc.duration_days, pc.max_redemptions,
+              pc.expires_at, pc.active, pc.created_at,
+              COUNT(pr.id)::int AS redeemed_count
+       FROM promo_codes pc
+       LEFT JOIN promo_redemptions pr ON pr.promo_code_id = pc.id
+       GROUP BY pc.id
+       ORDER BY pc.created_at DESC`
+    );
+    res.json({ promoCodes: rows });
+  } catch (err) {
+    console.error('[promo] admin list error:', err);
+    res.status(500).json({ error: 'Failed to load promo codes' });
+  }
+});
+
+app.post('/api/admin/promo-codes', requireDb, requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const code = normalizePromoCode(req.body?.code);
+    const tier = normalizeUserTier(req.body?.tier);
+    const durationDays = Number.parseInt(String(req.body?.durationDays ?? ''), 10);
+    const maxRedemptionsRaw = req.body?.maxRedemptions;
+    const maxRedemptions = maxRedemptionsRaw === null || maxRedemptionsRaw === undefined || maxRedemptionsRaw === ''
+      ? null
+      : Number.parseInt(String(maxRedemptionsRaw), 10);
+    const expiresAtRaw = typeof req.body?.expiresAt === 'string' ? req.body.expiresAt.trim() : '';
+    const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
+
+    if (!isValidPromoCode(code)) {
+      return res.status(400).json({ error: 'Promo code must be 3–32 letters, numbers, hyphens, or underscores' });
+    }
+    if (!USER_TIERS.has(req.body?.tier)) {
+      return res.status(400).json({ error: 'Promo tier must be user, gold, platinum, or diamond' });
+    }
+    if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 3650) {
+      return res.status(400).json({ error: 'Duration must be 1–3650 days' });
+    }
+    if (maxRedemptions !== null && (!Number.isInteger(maxRedemptions) || maxRedemptions < 1)) {
+      return res.status(400).json({ error: 'Max redemptions must be blank or at least 1' });
+    }
+    if (expiresAt && Number.isNaN(expiresAt.getTime())) {
+      return res.status(400).json({ error: 'Expiration date is invalid' });
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO promo_codes (code, tier, duration_days, max_redemptions, expires_at, active, created_by)
+       VALUES ($1, $2, $3, $4, $5, true, $6)
+       RETURNING id, code, tier, duration_days, max_redemptions, expires_at, active, created_at`,
+      [code, tier, durationDays, maxRedemptions, expiresAt, req.session.userId]
+    );
+    res.status(201).json({ promoCode: { ...rows[0], redeemed_count: 0 } });
+  } catch (err) {
+    console.error('[promo] admin create error:', err);
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'Promo code already exists' });
+    }
+    res.status(500).json({ error: 'Failed to create promo code' });
+  }
 });
 
 // ── Profile routes ────────────────────────────────────────────────────────────

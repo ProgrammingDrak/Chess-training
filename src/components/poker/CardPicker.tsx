@@ -31,6 +31,12 @@ const MODE_LABELS: Record<CardPickerMode, string> = {
 };
 
 const MODE_ORDER: CardPickerMode[] = ['grid', 'quick', 'text'];
+const SUIT_NAMES = {
+  s: 'Spade',
+  h: 'Heart',
+  d: 'Diamond',
+  c: 'Club',
+} as const;
 
 function addOrToggleCard(cards: Card[], card: Card, maxCards: number): Card[] {
   if (cards.some(selected => cardsEqual(selected, card))) {
@@ -164,7 +170,7 @@ export function CardPicker({
                   title={unavailable && card ? `${cardLabel(card)} is already known` : undefined}
                 >
                   <span>{SUIT_SYMBOLS[suit]}</span>
-                  <small>{suit.toUpperCase()}</small>
+                  <small>{SUIT_NAMES[suit]}</small>
                 </button>
               );
             })}

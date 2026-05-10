@@ -13,3 +13,21 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      - key: SKIP_SCHEMA_INIT
+        value: "true"
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: BUG_NOTIFICATION_EMAILS
+        sync: false
+      - key: NOTIFICATION_FROM_EMAIL
+        sync: false
+      - key: WELCOME_FROM_EMAIL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: CLOUDFLARE_ACCESS_ENABLED
+        sync: false
+      - key: CLOUDFLARE_ACCESS_TEAM_DOMAIN
+        sync: false
+      - key: CLOUDFLARE_ACCESS_AUD
+        sync: false

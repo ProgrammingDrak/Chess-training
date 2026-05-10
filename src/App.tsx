@@ -8,6 +8,7 @@ import { usePokerProgress } from './hooks/usePokerProgress';
 import { useBlackjackProgress } from './hooks/useBlackjackProgress';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/auth/AuthModal';
+import { AccountModal } from './components/auth/AccountModal';
 import { TierGateModal } from './components/TierGateModal';
 import { GameSelector } from './components/GameSelector';
 import { OpeningSelector } from './components/OpeningSelector';
@@ -29,7 +30,7 @@ import { BlackjackHome } from './components/blackjack/BlackjackHome';
 import { BlackjackDrillRouter } from './components/blackjack/BlackjackDrillRouter';
 import { BlackjackDashboard } from './components/blackjack/BlackjackDashboard';
 import { FEATURE_TIERS, POKER_DRILL_TIERS } from './data/featureTiers';
-import { canAccessTier, getTierLabel } from './types/tiers';
+import { HIGHEST_USER_TIER, USER_TIERS, canAccessTier, getTierLabel } from './types/tiers';
 
 const CHESS_VIEWS: AppView[] = ['chess_home', 'opening_detail', 'practice', 'challenge', 'dashboard'];
 const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drills', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup', 'poker_live_home', 'poker_live_active'];
@@ -55,14 +56,50 @@ function getInitialTheme(): 'dark' | 'light' {
 
 // ── Nav auth button ───────────────────────────────────────────────────────────
 
-function AuthButton({ onOpenModal }: { onOpenModal: () => void }) {
+function getInitialAdminViewTier(): UserTier {
+  try {
+    const stored = localStorage.getItem('gto-admin-view-tier');
+    if (USER_TIERS.includes(stored as UserTier)) return stored as UserTier;
+  } catch { /* ignore */ }
+  return HIGHEST_USER_TIER;
+}
+
+function AuthButton({
+  adminViewTier,
+  onAdminViewTierChange,
+  onOpenAccount,
+  onOpenModal,
+}: {
+  adminViewTier: UserTier;
+  onAdminViewTierChange: (tier: UserTier) => void;
+  onOpenAccount: () => void;
+  onOpenModal: () => void;
+}) {
   const { user, loading, logout } = useAuth();
 
   if (user) {
     return (
       <div className="nav-auth">
-        <span className="nav-username">{user.username}</span>
-        <span className={`nav-tier-badge tier-${user.tier}`}>{getTierLabel(user.tier)}</span>
+        <button className="nav-username nav-account-btn" onClick={onOpenAccount}>
+          {user.username}
+        </button>
+        {user.role === 'admin' && <span className="nav-role-badge">Admin</span>}
+        {user.role !== 'admin' && (
+          <span className={`nav-tier-badge tier-${user.tier}`}>{getTierLabel(user.tier)}</span>
+        )}
+        {user.role === 'admin' && (
+          <label className="admin-view-tier">
+            <span>View as</span>
+            <select
+              value={adminViewTier}
+              onChange={(e) => onAdminViewTierChange(e.target.value as UserTier)}
+            >
+              {USER_TIERS.map((tier) => (
+                <option key={tier} value={tier}>{getTierLabel(tier)}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <button className="nav-link nav-logout" onClick={logout}>
           Log Out
         </button>
@@ -87,8 +124,10 @@ function AuthButton({ onOpenModal }: { onOpenModal: () => void }) {
 function AppInner() {
   const { user } = useAuth();
   const [theme, setTheme] = useState<'dark' | 'light'>(getInitialTheme);
+  const [adminViewTier, setAdminViewTier] = useState<UserTier>(getInitialAdminViewTier);
   const [view, setView] = useState<AppView>('home');
   const [showAuth, setShowAuth] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const [tierGate, setTierGate] = useState<{ featureName: string; requiredTier: UserTier } | null>(null);
   const [selectedOpening, setSelectedOpening] = useState<Opening | null>(null);
   const [practiceLineIndex, setPracticeLineIndex] = useState(0);
@@ -107,7 +146,12 @@ function AppInner() {
     try { localStorage.setItem('gto-theme', theme); } catch { /* ignore */ }
   }, [theme]);
 
+  useEffect(() => {
+    try { localStorage.setItem('gto-admin-view-tier', adminViewTier); } catch { /* ignore */ }
+  }, [adminViewTier]);
+
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+  const accessTier = user?.role === 'admin' ? adminViewTier : user?.tier ?? null;
 
   const inChess = CHESS_VIEWS.includes(view);
   const inPoker = POKER_VIEWS.includes(view);
@@ -121,12 +165,12 @@ function AppInner() {
       poker_live_active: { featureName: 'Live Session Tracker', requiredTier: FEATURE_TIERS.pokerLiveSession },
     };
     const lockedView = lockedViews[view];
-    if (!lockedView || canAccessTier(user?.tier ?? null, lockedView.requiredTier)) return;
+    if (!lockedView || canAccessTier(accessTier, lockedView.requiredTier)) return;
 
     if (view === 'poker_live_active') setActiveLiveSessionId(null);
     setView('poker_home');
     setTierGate(lockedView);
-  }, [user?.tier, view]);
+  }, [accessTier, view]);
 
   const handleSelectOpening = (opening: Opening) => {
     setSelectedOpening(opening);
@@ -163,7 +207,7 @@ function AppInner() {
   };
 
   const requireTier = (requiredTier: UserTier, featureName: string, onAllowed: () => void) => {
-    if (canAccessTier(user?.tier ?? null, requiredTier)) {
+    if (canAccessTier(accessTier, requiredTier)) {
       onAllowed();
       return;
     }
@@ -284,7 +328,12 @@ function AppInner() {
           )}
 
           {/* Auth + Theme — always visible */}
-          <AuthButton onOpenModal={() => setShowAuth(true)} />
+          <AuthButton
+            adminViewTier={adminViewTier}
+            onAdminViewTierChange={setAdminViewTier}
+            onOpenAccount={() => setShowAccount(true)}
+            onOpenModal={() => setShowAuth(true)}
+          />
           <button
             className="theme-toggle"
             onClick={toggleTheme}
@@ -471,11 +520,12 @@ function AppInner() {
 
       {/* Auth modal */}
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
+      {showAccount && <AccountModal onClose={() => setShowAccount(false)} />}
       {tierGate && (
         <TierGateModal
           featureName={tierGate.featureName}
           requiredTier={tierGate.requiredTier}
-          currentTier={user?.tier ?? null}
+          currentTier={accessTier}
           onClose={() => setTierGate(null)}
           onSignIn={openAuthFromTierGate}
         />

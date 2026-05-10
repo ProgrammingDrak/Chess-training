@@ -11,7 +11,10 @@ export function AuthModal({ onClose }: AuthModalProps) {
   const { login, register } = useAuth();
   const [tab, setTab] = useState<Tab>('login');
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [promoCode, setPromoCode] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -35,7 +38,7 @@ export function AuthModal({ onClose }: AuthModalProps) {
       if (tab === 'login') {
         await login(username, password);
       } else {
-        await register(username, password);
+        await register(username, password, email, promoCode);
       }
       onClose();
     } catch (err) {
@@ -80,17 +83,56 @@ export function AuthModal({ onClose }: AuthModalProps) {
             />
           </div>
 
+          {tab === 'register' && (
+            <div className="auth-field">
+              <label htmlFor="auth-email">Email</label>
+              <input
+                id="auth-email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+              />
+            </div>
+          )}
+
+          {tab === 'register' && (
+            <div className="auth-field">
+              <label htmlFor="auth-promo-code">Promo Code</label>
+              <input
+                id="auth-promo-code"
+                type="text"
+                autoComplete="off"
+                value={promoCode}
+                onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+                placeholder="optional"
+              />
+            </div>
+          )}
+
           <div className="auth-field">
             <label htmlFor="auth-password">Password</label>
-            <input
-              id="auth-password"
-              type="password"
-              autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={tab === 'register' ? 'at least 8 characters' : ''}
-              required
-            />
+            <div className="auth-password-input">
+              <input
+                id="auth-password"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={tab === 'register' ? 'at least 8 characters' : ''}
+                required
+              />
+              <button
+                type="button"
+                className="auth-password-toggle"
+                onClick={() => setShowPassword((value) => !value)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                title={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? '◉' : '◯'}
+              </button>
+            </div>
           </div>
 
           {error && <p className="auth-error">{error}</p>}
