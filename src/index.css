@@ -6648,6 +6648,168 @@ button {
   text-underline-offset: 2px;
 }
 
+/* ── Feedback modal ───────────────────────────────────────────────────────── */
+.feedback-launcher {
+  position: fixed;
+  right: 20px;
+  bottom: 18px;
+  z-index: 120;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 10px 16px;
+  background: var(--bg-2);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-card);
+  font-size: 0.88rem;
+  font-weight: 700;
+  transition: transform 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.feedback-launcher:hover,
+.feedback-launcher:focus-visible {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  outline: none;
+}
+
+.feedback-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.feedback-modal {
+  position: relative;
+  width: min(100%, 460px);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  padding: 28px;
+}
+
+.feedback-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.feedback-close:hover {
+  color: var(--text-primary);
+}
+
+.feedback-kicker {
+  color: var(--accent-hover);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.feedback-modal h2 {
+  margin-top: 6px;
+  margin-bottom: 18px;
+  color: var(--text-primary);
+  font-size: 1.35rem;
+  line-height: 1.25;
+}
+
+.feedback-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.feedback-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.feedback-field span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.feedback-field input,
+.feedback-field textarea {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 0.95rem;
+  padding: 10px 12px;
+  transition: border-color 0.15s;
+}
+
+.feedback-field textarea {
+  min-height: 150px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.feedback-field input:focus,
+.feedback-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.feedback-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.feedback-actions .btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.feedback-success {
+  border: 1px solid rgba(48, 232, 122, 0.24);
+  border-radius: 8px;
+  background: rgba(48, 232, 122, 0.08);
+  color: var(--green);
+  padding: 12px 14px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 520px) {
+  .feedback-launcher {
+    right: 16px;
+    bottom: 14px;
+  }
+
+  .feedback-actions .btn-primary,
+  .feedback-actions .btn-secondary {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 /* ── Account modal ────────────────────────────────────────────────────────── */
 .account-modal {
   background: var(--bg-1);
