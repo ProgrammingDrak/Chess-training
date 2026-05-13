@@ -29,6 +29,7 @@ import { useLiveSessions } from './hooks/useLiveSessions';
 import { BlackjackHome } from './components/blackjack/BlackjackHome';
 import { BlackjackDrillRouter } from './components/blackjack/BlackjackDrillRouter';
 import { BlackjackDashboard } from './components/blackjack/BlackjackDashboard';
+import { AdminActivityPage } from './components/admin/AdminActivityPage';
 import { FEATURE_TIERS, POKER_DRILL_TIERS } from './data/featureTiers';
 import { canAccessTier, getTierLabel } from './types/tiers';
 
@@ -230,6 +231,13 @@ function AppInner() {
   const inChess = CHESS_VIEWS.includes(view);
   const inPoker = POKER_VIEWS.includes(view);
   const inBlackjack = BLACKJACK_VIEWS.includes(view);
+  const inAdmin = view === 'admin_activity';
+
+  useEffect(() => {
+    if (view === 'admin_activity' && user?.role !== 'admin') {
+      setView('home');
+    }
+  }, [user?.role, view]);
 
   useEffect(() => {
     const lockedViews: Partial<Record<AppView, { featureName: string; requiredTier: UserTier }>> = {
@@ -398,6 +406,15 @@ function AppInner() {
                 My Stats
               </button>
             </>
+          )}
+
+          {user?.role === 'admin' && (
+            <button
+              className={`nav-link ${inAdmin ? 'active' : ''}`}
+              onClick={() => setView('admin_activity')}
+            >
+              Admin
+            </button>
           )}
 
           {/* Auth + Theme — always visible */}
@@ -590,6 +607,10 @@ function AppInner() {
             onReset={resetBJProgress}
             onBack={() => setView('blackjack_home')}
           />
+        )}
+
+        {view === 'admin_activity' && (
+          <AdminActivityPage onBack={() => setView('home')} />
         )}
       </main>
 
