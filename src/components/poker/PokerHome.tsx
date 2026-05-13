@@ -77,7 +77,6 @@ export function PokerHome({
         <div style={{ flex: 1 }}>
           <div className="drill-module-name">
             Player Profiles
-            <TierChip tier={FEATURE_TIERS.pokerProfiles} />
           </div>
           <div className="drill-module-desc">
             Build hand-range profiles for Hero and opponents. 4-color action grid (fold/limp/call/raise),
