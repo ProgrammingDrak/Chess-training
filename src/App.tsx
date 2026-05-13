@@ -172,7 +172,6 @@ function AppInner() {
 
   useEffect(() => {
     const lockedViews: Partial<Record<AppView, { featureName: string; requiredTier: UserTier }>> = {
-      poker_profiles: { featureName: 'Player Profiles', requiredTier: FEATURE_TIERS.pokerProfiles },
       poker_hand_lookup: { featureName: 'What Should I Do?', requiredTier: FEATURE_TIERS.pokerHandLookup },
       poker_live_home: { featureName: 'Live Session Tracker', requiredTier: FEATURE_TIERS.pokerLiveSession },
       poker_live_active: { featureName: 'Live Session Tracker', requiredTier: FEATURE_TIERS.pokerLiveSession },
@@ -294,7 +293,7 @@ function AppInner() {
               </button>
               <button
                 className={`nav-link ${view === 'poker_profiles' ? 'active' : ''}`}
-                onClick={() => requireTier(FEATURE_TIERS.pokerProfiles, 'Player Profiles', () => setView('poker_profiles'))}
+                onClick={() => setView('poker_profiles')}
               >
                 Profiles
               </button>
@@ -411,7 +410,7 @@ function AppInner() {
           <PokerHome
             onViewDashboard={() => setView('poker_dashboard')}
             onViewDrills={() => setView('poker_drills')}
-            onViewProfiles={() => requireTier(FEATURE_TIERS.pokerProfiles, 'Player Profiles', () => setView('poker_profiles'))}
+            onViewProfiles={() => setView('poker_profiles')}
             onViewHandLookup={() => requireTier(FEATURE_TIERS.pokerHandLookup, 'What Should I Do?', () => setView('poker_hand_lookup'))}
             onViewLiveSession={() => requireTier(FEATURE_TIERS.pokerLiveSession, 'Live Session Tracker', () => setView('poker_live_home'))}
             onBack={() => setView('home')}
@@ -448,6 +447,10 @@ function AppInner() {
             onSaveProfile={saveProfile}
             onDeleteProfile={deleteProfile}
             onDuplicateTemplate={duplicateTemplate}
+            canCreateProfiles={canAccessTier(accessTier, FEATURE_TIERS.pokerProfiles)}
+            onCreateProfileBlocked={() =>
+              requireTier(FEATURE_TIERS.pokerProfiles, 'Create Player Profiles', () => {})
+            }
             onBack={() => setView('poker_home')}
           />
         )}
