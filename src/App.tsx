@@ -30,22 +30,11 @@ import { BlackjackHome } from './components/blackjack/BlackjackHome';
 import { BlackjackDrillRouter } from './components/blackjack/BlackjackDrillRouter';
 import { BlackjackDashboard } from './components/blackjack/BlackjackDashboard';
 import { FEATURE_TIERS, POKER_DRILL_TIERS } from './data/featureTiers';
-import { HIGHEST_USER_TIER, USER_TIERS, canAccessTier, getTierLabel } from './types/tiers';
+import { canAccessTier, getTierLabel } from './types/tiers';
 
 const CHESS_VIEWS: AppView[] = ['chess_home', 'opening_detail', 'practice', 'challenge', 'dashboard'];
 const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drills', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup', 'poker_live_home', 'poker_live_active'];
 const BLACKJACK_VIEWS: AppView[] = ['blackjack_home', 'blackjack_drill', 'blackjack_dashboard'];
-const ADMIN_VIEW_STATES = ['non-user', ...USER_TIERS] as const;
-
-type AdminViewState = (typeof ADMIN_VIEW_STATES)[number];
-
-const ADMIN_VIEW_LABELS: Record<AdminViewState, string> = {
-  'non-user': 'Non-user',
-  user: 'User',
-  gold: 'Gold',
-  platinum: 'Platinum',
-  diamond: 'Diamond',
-};
 
 const POKER_DRILL_NAMES: Record<PokerDrillType, string> = {
   hand_selection: 'Hand Selection',
@@ -67,22 +56,10 @@ function getInitialTheme(): 'dark' | 'light' {
 
 // ── Nav auth button ───────────────────────────────────────────────────────────
 
-function getInitialAdminViewState(): AdminViewState {
-  try {
-    const stored = localStorage.getItem('gto-admin-view-tier');
-    if (ADMIN_VIEW_STATES.includes(stored as AdminViewState)) return stored as AdminViewState;
-  } catch { /* ignore */ }
-  return HIGHEST_USER_TIER;
-}
-
 function AuthButton({
-  adminViewTier,
-  onAdminViewTierChange,
   onOpenAccount,
   onOpenModal,
 }: {
-  adminViewTier: AdminViewState;
-  onAdminViewTierChange: (tier: AdminViewState) => void;
   onOpenAccount: () => void;
   onOpenModal: () => void;
 }) {
@@ -97,19 +74,6 @@ function AuthButton({
         {user.role === 'admin' && <span className="nav-role-badge">Admin</span>}
         {user.role !== 'admin' && (
           <span className={`nav-tier-badge tier-${user.tier}`}>{getTierLabel(user.tier)}</span>
-        )}
-        {user.role === 'admin' && (
-          <label className="admin-view-tier">
-            <span>View as</span>
-            <select
-              value={adminViewTier}
-              onChange={(e) => onAdminViewTierChange(e.target.value as AdminViewState)}
-            >
-              {ADMIN_VIEW_STATES.map((tier) => (
-                <option key={tier} value={tier}>{ADMIN_VIEW_LABELS[tier]}</option>
-              ))}
-            </select>
-          </label>
         )}
         <button className="nav-link nav-logout" onClick={logout}>
           Log Out
@@ -238,7 +202,6 @@ function FeedbackModal({ onClose }: { onClose: () => void }) {
 function AppInner() {
   const { user } = useAuth();
   const [theme, setTheme] = useState<'dark' | 'light'>(getInitialTheme);
-  const [adminViewTier, setAdminViewTier] = useState<AdminViewState>(getInitialAdminViewState);
   const [view, setView] = useState<AppView>('home');
   const [showAuth, setShowAuth] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
@@ -261,14 +224,8 @@ function AppInner() {
     try { localStorage.setItem('gto-theme', theme); } catch { /* ignore */ }
   }, [theme]);
 
-  useEffect(() => {
-    try { localStorage.setItem('gto-admin-view-tier', adminViewTier); } catch { /* ignore */ }
-  }, [adminViewTier]);
-
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
-  const accessTier = user?.role === 'admin'
-    ? adminViewTier === 'non-user' ? null : adminViewTier
-    : user?.tier ?? null;
+  const accessTier = user?.tier ?? null;
 
   const inChess = CHESS_VIEWS.includes(view);
   const inPoker = POKER_VIEWS.includes(view);
@@ -445,8 +402,6 @@ function AppInner() {
 
           {/* Auth + Theme — always visible */}
           <AuthButton
-            adminViewTier={adminViewTier}
-            onAdminViewTierChange={setAdminViewTier}
             onOpenAccount={() => setShowAccount(true)}
             onOpenModal={() => setShowAuth(true)}
           />

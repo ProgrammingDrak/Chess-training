@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role          VARCHAR(20) NOT NULL DEFAULT 'user'
     CHECK (role IN ('user', 'admin')),
-  membership_tier VARCHAR(20) NOT NULL DEFAULT 'user'
+  membership_tier VARCHAR(20) NOT NULL DEFAULT 'diamond'
     CHECK (membership_tier IN ('user', 'gold', 'platinum', 'diamond')),
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
@@ -17,7 +17,14 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS email VARCHAR(254),
   ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user',
-  ADD COLUMN IF NOT EXISTS membership_tier VARCHAR(20) NOT NULL DEFAULT 'user';
+  ADD COLUMN IF NOT EXISTS membership_tier VARCHAR(20) NOT NULL DEFAULT 'diamond';
+
+ALTER TABLE users
+  ALTER COLUMN membership_tier SET DEFAULT 'diamond';
+
+UPDATE users
+  SET membership_tier = 'diamond'
+  WHERE membership_tier IS DISTINCT FROM 'diamond';
 
 DO $$
 BEGIN

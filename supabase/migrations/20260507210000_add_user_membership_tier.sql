@@ -1,5 +1,12 @@
 ALTER TABLE users
-  ADD COLUMN IF NOT EXISTS membership_tier VARCHAR(20) NOT NULL DEFAULT 'user';
+  ADD COLUMN IF NOT EXISTS membership_tier VARCHAR(20) NOT NULL DEFAULT 'diamond';
+
+ALTER TABLE users
+  ALTER COLUMN membership_tier SET DEFAULT 'diamond';
+
+UPDATE users
+  SET membership_tier = 'diamond'
+  WHERE membership_tier IS DISTINCT FROM 'diamond';
 
 DO $$
 BEGIN

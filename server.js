@@ -36,6 +36,7 @@ const cloudflareAccessAud = process.env.CLOUDFLARE_ACCESS_AUD ?? '';
 
 const BCRYPT_ROUNDS = 12;
 const USER_TIERS = new Set(['user', 'gold', 'platinum', 'diamond']);
+const DEFAULT_USER_TIER = 'diamond';
 const USER_ROLES = new Set(['user', 'admin']);
 const MAX_PROMO_DURATION_DAYS = 3650;
 const TIER_RANK = {
@@ -59,7 +60,7 @@ const BUG_NOTIFICATION_EMAILS = parseEmailList(process.env.BUG_NOTIFICATION_EMAI
 const WELCOME_FROM_EMAIL = process.env.WELCOME_FROM_EMAIL || process.env.NOTIFICATION_FROM_EMAIL;
 
 function normalizeUserTier(tier) {
-  return USER_TIERS.has(tier) ? tier : 'user';
+  return USER_TIERS.has(tier) ? tier : DEFAULT_USER_TIER;
 }
 
 function maxTier(a, b) {
@@ -233,10 +234,10 @@ async function findOrCreateCloudflareAccessUser(identity) {
     const username = `${base}${suffix}`.slice(0, 30);
     try {
       const { rows } = await pool.query(
-        `INSERT INTO users (username, email, password_hash, role)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO users (username, email, password_hash, role, membership_tier)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING id, username, email, role, membership_tier, created_at`,
-        [username, email, hash, role]
+        [username, email, hash, role, DEFAULT_USER_TIER]
       );
       await sendWelcomeEmail(rows[0]);
       return rows[0];
@@ -286,7 +287,7 @@ async function getActivePromo(userId, db = pool) {
 }
 
 async function serializeUser(user, db = pool) {
-  const membershipTier = normalizeUserTier(user.membership_tier);
+  const membershipTier = maxTier(normalizeUserTier(user.membership_tier), DEFAULT_USER_TIER);
   const activePromo = user.id ? await getActivePromo(user.id, db) : null;
   const effectiveTier = activePromo ? maxTier(membershipTier, activePromo.tier) : membershipTier;
   return {
@@ -646,12 +647,12 @@ async function sendWelcomeEmail(user) {
         '',
         `Your username is: ${username}`,
         '',
-        'You can use your account to save progress, redeem promo codes, and access the tools available to your tier.',
+        'You can use your account to save progress and access the training tools.',
       ].join('\n'),
       html: [
         `<p>Thanks for signing up for GTO Training, <strong>${username}</strong>!</p>`,
         `<p>Your username is: <strong>${username}</strong></p>`,
-        '<p>You can use your account to save progress, redeem promo codes, and access the tools available to your tier.</p>',
+        '<p>You can use your account to save progress and access the training tools.</p>',
       ].join(''),
     });
   } catch (err) {
@@ -775,10 +776,10 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
     const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const role = 'user';
     const { rows } = await client.query(
-      `INSERT INTO users (username, password_hash, email, role)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO users (username, password_hash, email, role, membership_tier)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id, username, email, role, membership_tier, created_at`,
-      [username, hash, email, role]
+      [username, hash, email, role, DEFAULT_USER_TIER]
     );
     const user = rows[0];
     if (promoCode) {

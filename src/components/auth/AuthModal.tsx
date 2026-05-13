@@ -12,7 +12,6 @@ export function AuthModal({ onClose }: AuthModalProps) {
   const [tab, setTab] = useState<Tab>('login');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
-  const [promoCode, setPromoCode] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
@@ -38,7 +37,7 @@ export function AuthModal({ onClose }: AuthModalProps) {
       if (tab === 'login') {
         await login(username, password);
       } else {
-        await register(username, password, email, promoCode);
+        await register(username, password, email);
       }
       onClose();
     } catch (err) {
@@ -93,20 +92,6 @@ export function AuthModal({ onClose }: AuthModalProps) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-              />
-            </div>
-          )}
-
-          {tab === 'register' && (
-            <div className="auth-field">
-              <label htmlFor="auth-promo-code">Promo Code</label>
-              <input
-                id="auth-promo-code"
-                type="text"
-                autoComplete="off"
-                value={promoCode}
-                onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
-                placeholder="optional"
               />
             </div>
           )}
