@@ -89,4 +89,5 @@ export type AppView =
   | 'poker_live_active'
   | 'blackjack_home'
   | 'blackjack_drill'
-  | 'blackjack_dashboard';
+  | 'blackjack_dashboard'
+  | 'admin_activity';

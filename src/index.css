@@ -7084,6 +7084,285 @@ button {
   }
 }
 
+/* ── Admin activity page ─────────────────────────────────────────────────── */
+.admin-page {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.admin-page-header,
+.admin-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.admin-page-header {
+  flex-wrap: wrap;
+}
+
+.admin-page-header > div {
+  flex: 1;
+  min-width: 220px;
+}
+
+.admin-page-header h2,
+.admin-panel h3,
+.admin-breakdown-grid h4 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.admin-page-header h2 {
+  font-size: 1.55rem;
+  line-height: 1.2;
+}
+
+.admin-page-header p,
+.admin-panel-header p {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.admin-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-stat-card,
+.admin-panel {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.admin-stat-card {
+  min-height: 108px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+.admin-stat-value {
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: 1.45rem;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.admin-stat-label {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.admin-stat-detail {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.admin-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.admin-panel h3 {
+  font-size: 1rem;
+}
+
+.admin-two-column {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-breakdown-grid > div {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.admin-breakdown-grid h4 {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+}
+
+.admin-breakdown-row,
+.admin-list-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-breakdown-row {
+  align-items: center;
+  padding: 6px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.admin-breakdown-row:first-of-type {
+  border-top: none;
+}
+
+.admin-breakdown-row span,
+.admin-list-row span,
+.admin-empty {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.admin-breakdown-row strong,
+.admin-list-row strong {
+  color: var(--text-primary);
+  font-size: 0.86rem;
+}
+
+.admin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-list-row {
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.admin-list-row > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-list-row > div:last-child {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.admin-list-row strong,
+.admin-list-row span {
+  overflow-wrap: anywhere;
+}
+
+.admin-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.admin-table {
+  width: 100%;
+  min-width: 860px;
+  border-collapse: collapse;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.admin-table th {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.admin-table td {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+
+.admin-table tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-where {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-where span {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
+
+.admin-empty {
+  background: var(--bg-1);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+
+.admin-feedback-list.compact .admin-feedback-card {
+  background: var(--bg-1);
+}
+
+@media (max-width: 1000px) {
+  .admin-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-two-column,
+  .admin-breakdown-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .admin-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-page-header,
+  .admin-panel-header,
+  .admin-list-row {
+    flex-direction: column;
+  }
+
+  .admin-page-header .btn-secondary {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .admin-list-row > div:last-child {
+    text-align: left;
+  }
+}
+
 /* ============================================================
    Live Session Tracker
    In-person poker session UI: oval table, seat chips, stats.

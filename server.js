@@ -262,7 +262,9 @@ async function authenticateCloudflareAccess(req) {
   const identity = await verifyCloudflareAccessJwt(req);
   if (!identity) return null;
   const user = await findOrCreateCloudflareAccessUser(identity);
-  return setSessionUser(req, user);
+  const serialized = await setSessionUser(req, user);
+  await recordLoginEvent(req, user, 'cloudflare_access');
+  return serialized;
 }
 
 async function getActivePromo(userId, db = pool) {
@@ -545,29 +547,129 @@ async function redeemPromoCode(userId, rawCode, db = pool) {
 let feedbackSchemaReady = false;
 
 async function ensureFeedbackSchema() {
-  if (feedbackSchemaReady) return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS feedback_messages (
-      id                SERIAL PRIMARY KEY,
-      user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      reporter_username VARCHAR(30),
-      reporter_email    VARCHAR(254),
-      contact_email     VARCHAR(254),
-      message           TEXT NOT NULL,
-      source            VARCHAR(200),
-      path              VARCHAR(500),
-      status            VARCHAR(20) NOT NULL DEFAULT 'new'
-        CHECK (status IN ('new', 'read')),
-      read_at           TIMESTAMPTZ,
-      read_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      created_at        TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_feedback_messages_status_created
-      ON feedback_messages (status, created_at DESC)
-  `);
-  feedbackSchemaReady = true;
+  if (feedbackSchemaReady) return true;
+  const { rows: existing } = await pool.query("SELECT to_regclass('public.feedback_messages') AS table_name");
+  if (existing[0]?.table_name) {
+    feedbackSchemaReady = true;
+    return true;
+  }
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS feedback_messages (
+        id                SERIAL PRIMARY KEY,
+        user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        reporter_username VARCHAR(30),
+        reporter_email    VARCHAR(254),
+        contact_email     VARCHAR(254),
+        message           TEXT NOT NULL,
+        source            VARCHAR(200),
+        path              VARCHAR(500),
+        status            VARCHAR(20) NOT NULL DEFAULT 'new'
+          CHECK (status IN ('new', 'read')),
+        read_at           TIMESTAMPTZ,
+        read_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at        TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_feedback_messages_status_created
+        ON feedback_messages (status, created_at DESC)
+    `);
+    feedbackSchemaReady = true;
+    return true;
+  } catch (err) {
+    if (err.code === '42501') {
+      console.warn('[feedback] feedback_messages table is not available; run the latest migration to enable feedback storage');
+      return false;
+    }
+    throw err;
+  }
+}
+
+// ── Login event schema/audit ────────────────────────────────────────────────
+
+let loginEventsSchemaReady = false;
+
+async function ensureLoginEventsSchema() {
+  if (loginEventsSchemaReady) return true;
+  const { rows: existing } = await pool.query("SELECT to_regclass('public.login_events') AS table_name");
+  if (existing[0]?.table_name) {
+    loginEventsSchemaReady = true;
+    return true;
+  }
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS login_events (
+        id          BIGSERIAL PRIMARY KEY,
+        user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        username    VARCHAR(30),
+        email       VARCHAR(254),
+        method      VARCHAR(40) NOT NULL DEFAULT 'password',
+        ip_address  TEXT,
+        country     VARCHAR(120),
+        user_agent  TEXT,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_login_events_created
+        ON login_events (created_at DESC)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_login_events_user_created
+        ON login_events (user_id, created_at DESC)
+    `);
+    loginEventsSchemaReady = true;
+    return true;
+  } catch (err) {
+    if (err.code === '42501') {
+      console.warn('[auth] login_events table is not available; run the latest migration to enable login audit capture');
+      return false;
+    }
+    throw err;
+  }
+}
+
+function firstHeaderValue(value) {
+  if (!value) return null;
+  return String(value).split(',')[0]?.trim() || null;
+}
+
+function getRequestIp(req) {
+  return firstHeaderValue(req.get('cf-connecting-ip'))
+    ?? firstHeaderValue(req.get('x-forwarded-for'))
+    ?? req.ip
+    ?? req.socket?.remoteAddress
+    ?? null;
+}
+
+function getRequestCountry(req) {
+  return firstHeaderValue(req.get('cf-ipcountry'))
+    ?? firstHeaderValue(req.get('x-vercel-ip-country'))
+    ?? firstHeaderValue(req.get('x-country-code'));
+}
+
+async function recordLoginEvent(req, user, method) {
+  try {
+    if (!dbConfigured || !pool || !user?.id) return;
+    const available = await ensureLoginEventsSchema();
+    if (!available) return;
+    await pool.query(
+      `INSERT INTO login_events (user_id, username, email, method, ip_address, country, user_agent)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        user.id,
+        user.username ?? null,
+        user.email ?? null,
+        method,
+        getRequestIp(req),
+        getRequestCountry(req),
+        req.get('user-agent') ?? null,
+      ]
+    );
+  } catch (err) {
+    console.warn('[auth] failed to record login event:', err.message);
+  }
 }
 
 // ── Admin notifications ─────────────────────────────────────────────────────
@@ -854,6 +956,7 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
     await client.query('COMMIT');
     await sendWelcomeEmail(user);
     const serialized = await setSessionUser(req, user);
+    await recordLoginEvent(req, user, 'signup');
 
     res.status(201).json({
       user: serialized,
@@ -886,6 +989,7 @@ app.post('/api/auth/login', requireDb, async (req, res) => {
     }
 
     const serialized = await setSessionUser(req, user);
+    await recordLoginEvent(req, user, 'password');
 
     res.json({ user: serialized });
   } catch (err) {
@@ -975,6 +1079,137 @@ app.post('/api/account/promo-code', requireDb, requireAuth, async (req, res) => 
     res.status(err.statusCode ?? 500).json({ error: err.statusCode ? err.message : 'Failed to redeem promo code' });
   } finally {
     client.release();
+  }
+});
+
+app.get('/api/admin/activity', requireDb, requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const [loginEventsAvailable, feedbackAvailable] = await Promise.all([ensureLoginEventsSchema(), ensureFeedbackSchema()]);
+
+    const [
+      summaryResult,
+      usersByTierResult,
+      usersByRoleResult,
+      loginsByMethodResult,
+      recentUsersResult,
+      activeSessionsResult,
+      recentLoginEventsResult,
+      topLiveUsersResult,
+      recentFeedbackResult,
+    ] = await Promise.all([
+      pool.query(`
+        SELECT
+          (SELECT COUNT(*)::int FROM users) AS total_users,
+          (SELECT COUNT(*)::int FROM users WHERE created_at >= NOW() - INTERVAL '7 days') AS new_users_7d,
+          (SELECT COUNT(*)::int FROM users WHERE created_at >= NOW() - INTERVAL '30 days') AS new_users_30d,
+          (SELECT COUNT(*)::int FROM sessions WHERE expire > NOW()) AS active_sessions,
+          ${loginEventsAvailable
+            ? `(SELECT COUNT(*)::int FROM login_events WHERE created_at >= NOW() - INTERVAL '24 hours')`
+            : '0::int'} AS logins_24h,
+          ${loginEventsAvailable
+            ? `(SELECT COUNT(*)::int FROM login_events WHERE created_at >= NOW() - INTERVAL '7 days')`
+            : '0::int'} AS logins_7d,
+          ${loginEventsAvailable
+            ? `(SELECT COUNT(DISTINCT user_id)::int FROM login_events WHERE user_id IS NOT NULL AND created_at >= NOW() - INTERVAL '7 days')`
+            : '0::int'} AS unique_login_users_7d,
+          (SELECT COUNT(*)::int FROM live_sessions) AS total_live_sessions,
+          (SELECT COUNT(*)::int FROM live_sessions WHERE ended_at IS NULL) AS open_live_sessions,
+          (SELECT COUNT(*)::int FROM live_sessions WHERE started_at >= NOW() - INTERVAL '7 days') AS live_sessions_7d,
+          ${feedbackAvailable ? '(SELECT COUNT(*)::int FROM feedback_messages)' : '0::int'} AS total_feedback,
+          ${feedbackAvailable ? `(SELECT COUNT(*)::int FROM feedback_messages WHERE status = 'new')` : '0::int'} AS unread_feedback
+      `),
+      pool.query(`
+        SELECT membership_tier AS tier, COUNT(*)::int AS count
+        FROM users
+        GROUP BY membership_tier
+        ORDER BY membership_tier
+      `),
+      pool.query(`
+        SELECT role, COUNT(*)::int AS count
+        FROM users
+        GROUP BY role
+        ORDER BY role
+      `),
+      loginEventsAvailable ? pool.query(`
+        SELECT method, COUNT(*)::int AS count, MAX(created_at) AS last_seen_at
+        FROM login_events
+        GROUP BY method
+        ORDER BY count DESC, method
+      `) : Promise.resolve({ rows: [] }),
+      loginEventsAvailable ? pool.query(`
+        SELECT u.id, u.username, u.email, u.role, u.membership_tier, u.created_at,
+               MAX(le.created_at) AS last_login_at,
+               COUNT(le.id)::int AS login_count
+        FROM users u
+        LEFT JOIN login_events le ON le.user_id = u.id
+        GROUP BY u.id
+        ORDER BY u.created_at DESC
+        LIMIT 20
+      `) : pool.query(`
+        SELECT u.id, u.username, u.email, u.role, u.membership_tier, u.created_at,
+               NULL::timestamptz AS last_login_at,
+               0::int AS login_count
+        FROM users u
+        ORDER BY u.created_at DESC
+        LIMIT 20
+      `),
+      pool.query(`
+        SELECT s.sid, s.expire,
+               s.sess->>'userId' AS user_id,
+               COALESCE(u.username, s.sess->>'username') AS username,
+               COALESCE(u.email, s.sess->>'email') AS email,
+               u.role,
+               u.membership_tier
+        FROM sessions s
+        LEFT JOIN users u ON u.id::text = s.sess->>'userId'
+        WHERE s.expire > NOW()
+        ORDER BY s.expire DESC
+        LIMIT 50
+      `),
+      loginEventsAvailable ? pool.query(`
+        SELECT le.id, le.user_id,
+               COALESCE(u.username, le.username) AS username,
+               COALESCE(u.email, le.email) AS email,
+               le.method, le.ip_address, le.country, le.user_agent, le.created_at
+        FROM login_events le
+        LEFT JOIN users u ON u.id = le.user_id
+        ORDER BY le.created_at DESC
+        LIMIT 50
+      `) : Promise.resolve({ rows: [] }),
+      pool.query(`
+        SELECT u.id, u.username, u.email,
+               COUNT(ls.id)::int AS live_session_count,
+               MAX(ls.started_at) AS last_started_at,
+               MAX(ls.updated_at) AS last_updated_at
+        FROM live_sessions ls
+        JOIN users u ON u.id = ls.user_id
+        GROUP BY u.id
+        ORDER BY live_session_count DESC, last_updated_at DESC
+        LIMIT 10
+      `),
+      feedbackAvailable ? pool.query(`
+        SELECT fm.id, fm.user_id, fm.reporter_username, fm.reporter_email,
+               fm.contact_email, fm.message, fm.path, fm.status, fm.created_at
+        FROM feedback_messages fm
+        ORDER BY fm.created_at DESC
+        LIMIT 10
+      `) : Promise.resolve({ rows: [] }),
+    ]);
+
+    res.json({
+      summary: summaryResult.rows[0],
+      usersByTier: usersByTierResult.rows,
+      usersByRole: usersByRoleResult.rows,
+      loginsByMethod: loginsByMethodResult.rows,
+      recentUsers: recentUsersResult.rows,
+      activeSessions: activeSessionsResult.rows,
+      recentLoginEvents: recentLoginEventsResult.rows,
+      topLiveUsers: topLiveUsersResult.rows,
+      recentFeedback: recentFeedbackResult.rows,
+    });
+  } catch (err) {
+    console.error('[admin] activity error:', err);
+    res.status(500).json({ error: 'Failed to load admin activity' });
   }
 });
 
