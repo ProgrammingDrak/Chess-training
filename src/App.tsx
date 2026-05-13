@@ -156,7 +156,7 @@ function FeedbackModal({ onClose }: { onClose: () => void }) {
         <h2>Send a suggestion</h2>
         {sent ? (
           <div className="feedback-success">
-            Thanks. Your feedback was sent to the admins.
+            Thanks. Your feedback was saved to the admin inbox.
           </div>
         ) : (
           <form className="feedback-form" onSubmit={handleSubmit}>

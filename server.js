@@ -540,6 +540,36 @@ async function redeemPromoCode(userId, rawCode, db = pool) {
   }
 }
 
+// ── Feedback inbox schema ───────────────────────────────────────────────────
+
+let feedbackSchemaReady = false;
+
+async function ensureFeedbackSchema() {
+  if (feedbackSchemaReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feedback_messages (
+      id                SERIAL PRIMARY KEY,
+      user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      reporter_username VARCHAR(30),
+      reporter_email    VARCHAR(254),
+      contact_email     VARCHAR(254),
+      message           TEXT NOT NULL,
+      source            VARCHAR(200),
+      path              VARCHAR(500),
+      status            VARCHAR(20) NOT NULL DEFAULT 'new'
+        CHECK (status IN ('new', 'read')),
+      read_at           TIMESTAMPTZ,
+      read_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_feedback_messages_status_created
+      ON feedback_messages (status, created_at DESC)
+  `);
+  feedbackSchemaReady = true;
+}
+
 // ── Admin notifications ─────────────────────────────────────────────────────
 
 function notificationRecipients() {
@@ -702,6 +732,15 @@ app.post('/api/bug-reports', async (req, res) => {
 
 app.post('/api/feedback', async (req, res) => {
   try {
+    if (!dbConfigured) {
+      return res.status(503).json({ error: 'Feedback inbox unavailable' });
+    }
+    const ok = await checkDbHealth(pool);
+    if (!ok) {
+      return res.status(503).json({ error: 'Feedback inbox temporarily unavailable' });
+    }
+    await ensureFeedbackSchema();
+
     const message = trimText(req.body?.message);
     if (message.length < 3) {
       return res.status(400).json({ error: 'Feedback message required' });
@@ -714,11 +753,29 @@ app.post('/api/feedback', async (req, res) => {
 
     const pathName = trimText(req.body?.path, 500) || 'Unknown page';
     const source = trimText(req.body?.source, 200) || 'feedback button';
+    const reporterEmail = normalizeEmail(req.session?.email);
     const reporter = req.session?.userId
-      ? `${req.session.username ?? 'user'} (#${req.session.userId}${req.session.email ? `, ${req.session.email}` : ''})`
+      ? `${req.session.username ?? 'user'} (#${req.session.userId}${reporterEmail ? `, ${reporterEmail}` : ''})`
       : 'Anonymous';
 
+    const { rows } = await pool.query(
+      `INSERT INTO feedback_messages
+        (user_id, reporter_username, reporter_email, contact_email, message, source, path)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, created_at`,
+      [
+        req.session?.userId ?? null,
+        req.session?.username ?? null,
+        reporterEmail,
+        contactEmail,
+        message,
+        source,
+        pathName,
+      ]
+    );
+
     const body = [
+      `Feedback ID: ${rows[0].id}`,
       `Reporter: ${reporter}`,
       contactEmail ? `Contact: ${contactEmail}` : 'Contact: not provided',
       `Source: ${source}`,
@@ -727,10 +784,19 @@ app.post('/api/feedback', async (req, res) => {
       message,
     ].join('\n');
 
-    const result = await notifyAdminEmails('[GTO Training] Feedback', body);
+    let notification = { sent: false, reason: 'not_attempted' };
+    try {
+      notification = await notifyAdminEmails('[GTO Training] Feedback', body);
+    } catch (err) {
+      console.warn('[feedback] optional email notification failed:', err.message);
+      notification = { sent: false, reason: 'send_failed' };
+    }
+
     res.status(202).json({
       ok: true,
-      notified: result.sent,
+      id: rows[0].id,
+      createdAt: rows[0].created_at,
+      notified: notification.sent,
       recipientsConfigured: adminEmailRecipients().length > 0,
     });
   } catch (err) {
@@ -971,6 +1037,68 @@ app.post('/api/admin/promo-codes', requireDb, requireAuth, requireAdmin, async (
       return res.status(400).json({ error: 'Promo code already exists' });
     }
     res.status(500).json({ error: 'Failed to create promo code' });
+  }
+});
+
+app.get('/api/admin/feedback', requireDb, requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    await ensureFeedbackSchema();
+    const { rows } = await pool.query(
+      `SELECT fm.id, fm.user_id, fm.reporter_username, fm.reporter_email,
+              fm.contact_email, fm.message, fm.source, fm.path, fm.status,
+              fm.read_at, fm.created_at,
+              reader.username AS read_by_username
+       FROM feedback_messages fm
+       LEFT JOIN users reader ON reader.id = fm.read_by
+       ORDER BY fm.created_at DESC
+       LIMIT 100`
+    );
+    res.json({
+      feedback: rows.map((row) => ({
+        id: row.id,
+        userId: row.user_id,
+        reporterUsername: row.reporter_username,
+        reporterEmail: row.reporter_email,
+        contactEmail: row.contact_email,
+        message: row.message,
+        source: row.source,
+        path: row.path,
+        status: row.status,
+        readAt: row.read_at,
+        readByUsername: row.read_by_username,
+        createdAt: row.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error('[feedback] admin list error:', err);
+    res.status(500).json({ error: 'Failed to load feedback inbox' });
+  }
+});
+
+app.patch('/api/admin/feedback/:id', requireDb, requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await ensureFeedbackSchema();
+    const status = req.body?.status === 'read' ? 'read' : req.body?.status === 'new' ? 'new' : null;
+    if (!status) {
+      return res.status(400).json({ error: 'Status must be new or read' });
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE feedback_messages
+       SET status = $1,
+           read_at = CASE WHEN $1 = 'read' THEN COALESCE(read_at, NOW()) ELSE NULL END,
+           read_by = CASE WHEN $1 = 'read' THEN $2 ELSE NULL END
+       WHERE id = $3
+       RETURNING id, status, read_at`,
+      [status, req.session.userId, req.params.id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Feedback message not found' });
+    }
+    res.json({ feedback: { id: rows[0].id, status: rows[0].status, readAt: rows[0].read_at } });
+  } catch (err) {
+    console.error('[feedback] admin update error:', err);
+    res.status(500).json({ error: 'Failed to update feedback message' });
   }
 });
 

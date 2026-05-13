@@ -6951,14 +6951,136 @@ button {
   font-size: 0.86rem;
 }
 
+.admin-feedback-inbox {
+  gap: 14px;
+}
+
+.admin-feedback-header,
+.admin-feedback-card-header,
+.admin-feedback-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-feedback-header h3 {
+  margin-bottom: 2px;
+}
+
+.admin-feedback-header .btn-secondary {
+  padding: 8px 14px;
+  flex-shrink: 0;
+}
+
+.admin-feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-feedback-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.admin-feedback-card.new {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: color-mix(in srgb, var(--accent-dim) 28%, var(--bg-1));
+}
+
+.admin-feedback-card-header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.admin-feedback-card-header strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-feedback-card-header time {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.admin-feedback-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 0.64rem;
+  font-weight: 800;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.admin-feedback-status.new {
+  color: #fff;
+  background: var(--accent);
+}
+
+.admin-feedback-status.read {
+  color: var(--text-secondary);
+  background: var(--bg-3);
+}
+
+.admin-feedback-message {
+  color: var(--text-primary) !important;
+  font-size: 0.9rem !important;
+  line-height: 1.55 !important;
+  white-space: pre-wrap;
+}
+
+.admin-feedback-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-feedback-meta span {
+  color: var(--text-secondary);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-feedback-actions {
+  justify-content: flex-end;
+}
+
+.admin-feedback-actions .btn-ghost {
+  padding: 6px 10px;
+}
+
 @media (max-width: 620px) {
   .account-form-row,
-  .account-modal-header {
+  .account-modal-header,
+  .admin-feedback-header,
+  .admin-feedback-card-header {
     flex-direction: column;
   }
 
   .account-code-row {
     grid-template-columns: 1fr;
+  }
+
+  .admin-feedback-header .btn-secondary {
+    width: 100%;
+    justify-content: center;
   }
 }
 
