@@ -38,7 +38,7 @@ npm run build     # Production build
 
 Set `ADMIN_EMAILS` to a comma-separated list of verified Cloudflare Access email addresses that should receive the `admin` role when their local account is created through Access. Existing admins can also be promoted directly in the database. New and existing users are currently treated as Diamond status while tier gating is disabled.
 
-Bug reports sent to `POST /api/bug-reports` notify `BUG_NOTIFICATION_EMAILS`, or fall back to `ADMIN_EMAILS`. Feedback sent from the bottom feedback button posts to `POST /api/feedback` and notifies `ADMIN_EMAILS`. Welcome emails are sent after signup when the account has an email address. Email delivery uses Resend when `RESEND_API_KEY` and sender env vars are configured; otherwise emails are logged server-side with the intended recipients. Set `WELCOME_FROM_EMAIL` for welcome emails, or omit it to fall back to `NOTIFICATION_FROM_EMAIL`.
+Bug reports sent to `POST /api/bug-reports` notify `BUG_NOTIFICATION_EMAILS`, or fall back to `ADMIN_EMAILS`. Feedback sent from the bottom feedback button posts to `POST /api/feedback`, is saved to the in-app admin feedback inbox, and optionally notifies `ADMIN_EMAILS` when notification email is configured. Welcome emails are sent after signup when the account has an email address. Email delivery uses Resend when `RESEND_API_KEY` and sender env vars are configured; otherwise emails are logged server-side with the intended recipients. Set `WELCOME_FROM_EMAIL` for welcome emails, or omit it to fall back to `NOTIFICATION_FROM_EMAIL`.
 
 ## Cloudflare Access
 
