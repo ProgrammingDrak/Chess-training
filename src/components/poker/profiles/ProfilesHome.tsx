@@ -3,7 +3,6 @@ import type { PlayerProfile } from '../../../types/profiles';
 import { DEFAULT_ACTION_CONTEXT } from '../../../types/profiles';
 import { PROFILE_TEMPLATES } from '../../../data/poker/profileTemplates';
 import { handCombos } from '../../../utils/handMatrix';
-import { useAuth } from '../../../contexts/AuthContext';
 import { ProfileEditor } from './ProfileEditor';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -13,6 +12,8 @@ interface ProfilesHomeProps {
   onSaveProfile: (p: PlayerProfile) => Promise<PlayerProfile> | void;
   onDeleteProfile: (id: string) => Promise<void> | void;
   onDuplicateTemplate: (templateId: string, name: string, tableSize: number) => Promise<PlayerProfile>;
+  canCreateProfiles: boolean;
+  onCreateProfileBlocked: () => void;
   onBack: () => void;
 }
 
@@ -23,12 +24,21 @@ export function ProfilesHome({
   onSaveProfile,
   onDeleteProfile,
   onDuplicateTemplate,
+  canCreateProfiles,
+  onCreateProfileBlocked,
   onBack,
 }: ProfilesHomeProps) {
   // null = list view, 'new' = create blank, PlayerProfile = edit existing
   const [editing, setEditing] = useState<PlayerProfile | 'new' | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const { user } = useAuth();
+
+  const openNewProfile = () => {
+    if (!canCreateProfiles) {
+      onCreateProfileBlocked();
+      return;
+    }
+    setEditing('new');
+  };
 
   // ── Editor view ────────────────────────────────────────────────────────────
   if (editing !== null) {
@@ -60,7 +70,7 @@ export function ProfilesHome({
             decisions against real playing styles.
           </p>
         </div>
-        <button className="btn-primary profiles-new-btn" onClick={() => setEditing('new')}>
+        <button className="btn-primary profiles-new-btn" onClick={openNewProfile}>
           + New Profile
         </button>
       </div>
@@ -86,6 +96,10 @@ export function ProfilesHome({
               <button
                 className="btn-secondary profiles-tpl-btn"
                 onClick={async () => {
+                  if (!canCreateProfiles) {
+                    onCreateProfileBlocked();
+                    return;
+                  }
                   try {
                     const p = await onDuplicateTemplate(tpl.id, tpl.name, 6);
                     setEditing(p);
@@ -102,7 +116,7 @@ export function ProfilesHome({
       </section>
 
       {/* ── Hero profiles ── */}
-      {user && heroProfiles.length > 0 && (
+      {heroProfiles.length > 0 && (
         <section className="profiles-section">
           <h2 className="profiles-section-title">Hero Profiles</h2>
           <div className="profiles-cards-grid">
@@ -122,7 +136,7 @@ export function ProfilesHome({
       )}
 
       {/* ── Villain profiles ── */}
-      {user && villainProfiles.length > 0 && (
+      {villainProfiles.length > 0 && (
         <section className="profiles-section">
           <h2 className="profiles-section-title">Villain Profiles</h2>
           <div className="profiles-cards-grid">
@@ -142,7 +156,7 @@ export function ProfilesHome({
       )}
 
       {/* Empty state */}
-      {user && profiles.length === 0 && (
+      {profiles.length === 0 && (
         <div className="profiles-empty">
           <div className="profiles-empty-icon">📋</div>
           <p className="profiles-empty-text">
