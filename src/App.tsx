@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { Opening, AppView } from './types';
 import type { PokerDrillType } from './types/poker';
 import type { BlackjackDrillType } from './types/blackjack';
@@ -130,6 +130,109 @@ function AuthButton({
   );
 }
 
+function FeedbackModal({ onClose }: { onClose: () => void }) {
+  const { user } = useAuth();
+  const [message, setMessage] = useState('');
+  const [email, setEmail] = useState(user?.email ?? '');
+  const [error, setError] = useState('');
+  const [sent, setSent] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const messageRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    messageRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+
+    if (message.trim().length < 3) {
+      setError('Tell us a little more first.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const response = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          message,
+          email,
+          path: window.location.pathname,
+          source: 'app feedback button',
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.error || 'Failed to submit feedback');
+      }
+      setSent(true);
+      setMessage('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit feedback');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="feedback-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="feedback-modal" role="dialog" aria-modal="true" aria-label="Submit feedback">
+        <button className="feedback-close" onClick={onClose} aria-label="Close">×</button>
+        <div className="feedback-kicker">Feedback</div>
+        <h2>Send a suggestion</h2>
+        {sent ? (
+          <div className="feedback-success">
+            Thanks. Your feedback was sent to the admins.
+          </div>
+        ) : (
+          <form className="feedback-form" onSubmit={handleSubmit}>
+            <label className="feedback-field" htmlFor="feedback-message">
+              <span>Suggestion or feedback</span>
+              <textarea
+                id="feedback-message"
+                ref={messageRef}
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="What should we improve, add, or fix?"
+                maxLength={5000}
+              />
+            </label>
+            <label className="feedback-field" htmlFor="feedback-email">
+              <span>Email for follow-up</span>
+              <input
+                id="feedback-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="optional"
+              />
+            </label>
+            {error && <p className="auth-error">{error}</p>}
+            <div className="feedback-actions">
+              <button type="button" className="btn-secondary" onClick={onClose}>
+                Cancel
+              </button>
+              <button type="submit" className="btn-primary" disabled={submitting}>
+                {submitting ? 'Sending...' : 'Send feedback'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main app (inner — must be inside AuthProvider) ────────────────────────────
 
 function AppInner() {
@@ -139,6 +242,7 @@ function AppInner() {
   const [view, setView] = useState<AppView>('home');
   const [showAuth, setShowAuth] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
   const [tierGate, setTierGate] = useState<{ featureName: string; requiredTier: UserTier } | null>(null);
   const [selectedOpening, setSelectedOpening] = useState<Opening | null>(null);
   const [practiceLineIndex, setPracticeLineIndex] = useState(0);
@@ -534,9 +638,14 @@ function AppInner() {
         )}
       </main>
 
+      <button className="feedback-launcher" onClick={() => setShowFeedback(true)}>
+        Feedback
+      </button>
+
       {/* Auth modal */}
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
       {showAccount && <AccountModal onClose={() => setShowAccount(false)} />}
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
       {tierGate && (
         <TierGateModal
           featureName={tierGate.featureName}

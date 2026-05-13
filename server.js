@@ -545,22 +545,25 @@ function notificationRecipients() {
   return [...BUG_NOTIFICATION_EMAILS];
 }
 
+function adminEmailRecipients() {
+  return [...ADMIN_EMAILS];
+}
+
 function trimText(value, maxLength = 5000) {
   if (typeof value !== 'string') return '';
   return value.trim().slice(0, maxLength);
 }
 
-async function notifyAdmins(subject, text) {
-  const recipients = notificationRecipients();
+async function sendNotificationEmail(subject, text, recipients, label = 'admin-notify') {
   if (recipients.length === 0) {
-    console.warn('[admin-notify] no BUG_NOTIFICATION_EMAILS or ADMIN_EMAILS configured');
+    console.warn(`[${label}] no recipients configured`);
     return { sent: false, reason: 'no_recipients' };
   }
 
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.NOTIFICATION_FROM_EMAIL;
   if (!apiKey || !from) {
-    console.warn(`[admin-notify] ${subject}\nRecipients: ${recipients.join(', ')}\n${text}`);
+    console.warn(`[${label}] ${subject}\nRecipients: ${recipients.join(', ')}\n${text}`);
     return { sent: false, reason: 'email_provider_not_configured' };
   }
 
@@ -584,6 +587,14 @@ async function notifyAdmins(subject, text) {
   }
 
   return { sent: true };
+}
+
+async function notifyAdmins(subject, text) {
+  return sendNotificationEmail(subject, text, notificationRecipients());
+}
+
+async function notifyAdminEmails(subject, text) {
+  return sendNotificationEmail(subject, text, adminEmailRecipients(), 'feedback-notify');
 }
 
 async function sendEmail({ to, subject, text, html }) {
@@ -685,6 +696,45 @@ app.post('/api/bug-reports', async (req, res) => {
   } catch (err) {
     console.error('[bug-reports] notify error:', err);
     res.status(500).json({ error: 'Failed to submit bug report' });
+  }
+});
+
+app.post('/api/feedback', async (req, res) => {
+  try {
+    const message = trimText(req.body?.message);
+    if (message.length < 3) {
+      return res.status(400).json({ error: 'Feedback message required' });
+    }
+
+    const contactEmail = normalizeEmail(req.body?.email);
+    if (contactEmail && !isValidEmail(contactEmail)) {
+      return res.status(400).json({ error: 'Email must be a valid address' });
+    }
+
+    const pathName = trimText(req.body?.path, 500) || 'Unknown page';
+    const source = trimText(req.body?.source, 200) || 'feedback button';
+    const reporter = req.session?.userId
+      ? `${req.session.username ?? 'user'} (#${req.session.userId}${req.session.email ? `, ${req.session.email}` : ''})`
+      : 'Anonymous';
+
+    const body = [
+      `Reporter: ${reporter}`,
+      contactEmail ? `Contact: ${contactEmail}` : 'Contact: not provided',
+      `Source: ${source}`,
+      `Path: ${pathName}`,
+      '',
+      message,
+    ].join('\n');
+
+    const result = await notifyAdminEmails('[GTO Training] Feedback', body);
+    res.status(202).json({
+      ok: true,
+      notified: result.sent,
+      recipientsConfigured: adminEmailRecipients().length > 0,
+    });
+  } catch (err) {
+    console.error('[feedback] notify error:', err);
+    res.status(500).json({ error: 'Failed to submit feedback' });
   }
 });
 
