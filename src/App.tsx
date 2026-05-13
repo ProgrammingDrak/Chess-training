@@ -35,6 +35,17 @@ import { HIGHEST_USER_TIER, USER_TIERS, canAccessTier, getTierLabel } from './ty
 const CHESS_VIEWS: AppView[] = ['chess_home', 'opening_detail', 'practice', 'challenge', 'dashboard'];
 const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drills', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup', 'poker_live_home', 'poker_live_active'];
 const BLACKJACK_VIEWS: AppView[] = ['blackjack_home', 'blackjack_drill', 'blackjack_dashboard'];
+const ADMIN_VIEW_STATES = ['non-user', ...USER_TIERS] as const;
+
+type AdminViewState = (typeof ADMIN_VIEW_STATES)[number];
+
+const ADMIN_VIEW_LABELS: Record<AdminViewState, string> = {
+  'non-user': 'Non-user',
+  user: 'User',
+  gold: 'Gold',
+  platinum: 'Platinum',
+  diamond: 'Diamond',
+};
 
 const POKER_DRILL_NAMES: Record<PokerDrillType, string> = {
   hand_selection: 'Hand Selection',
@@ -56,10 +67,10 @@ function getInitialTheme(): 'dark' | 'light' {
 
 // ── Nav auth button ───────────────────────────────────────────────────────────
 
-function getInitialAdminViewTier(): UserTier {
+function getInitialAdminViewState(): AdminViewState {
   try {
     const stored = localStorage.getItem('gto-admin-view-tier');
-    if (USER_TIERS.includes(stored as UserTier)) return stored as UserTier;
+    if (ADMIN_VIEW_STATES.includes(stored as AdminViewState)) return stored as AdminViewState;
   } catch { /* ignore */ }
   return HIGHEST_USER_TIER;
 }
@@ -70,8 +81,8 @@ function AuthButton({
   onOpenAccount,
   onOpenModal,
 }: {
-  adminViewTier: UserTier;
-  onAdminViewTierChange: (tier: UserTier) => void;
+  adminViewTier: AdminViewState;
+  onAdminViewTierChange: (tier: AdminViewState) => void;
   onOpenAccount: () => void;
   onOpenModal: () => void;
 }) {
@@ -92,10 +103,10 @@ function AuthButton({
             <span>View as</span>
             <select
               value={adminViewTier}
-              onChange={(e) => onAdminViewTierChange(e.target.value as UserTier)}
+              onChange={(e) => onAdminViewTierChange(e.target.value as AdminViewState)}
             >
-              {USER_TIERS.map((tier) => (
-                <option key={tier} value={tier}>{getTierLabel(tier)}</option>
+              {ADMIN_VIEW_STATES.map((tier) => (
+                <option key={tier} value={tier}>{ADMIN_VIEW_LABELS[tier]}</option>
               ))}
             </select>
           </label>
@@ -124,7 +135,7 @@ function AuthButton({
 function AppInner() {
   const { user } = useAuth();
   const [theme, setTheme] = useState<'dark' | 'light'>(getInitialTheme);
-  const [adminViewTier, setAdminViewTier] = useState<UserTier>(getInitialAdminViewTier);
+  const [adminViewTier, setAdminViewTier] = useState<AdminViewState>(getInitialAdminViewState);
   const [view, setView] = useState<AppView>('home');
   const [showAuth, setShowAuth] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
@@ -151,7 +162,9 @@ function AppInner() {
   }, [adminViewTier]);
 
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
-  const accessTier = user?.role === 'admin' ? adminViewTier : user?.tier ?? null;
+  const accessTier = user?.role === 'admin'
+    ? adminViewTier === 'non-user' ? null : adminViewTier
+    : user?.tier ?? null;
 
   const inChess = CHESS_VIEWS.includes(view);
   const inPoker = POKER_VIEWS.includes(view);
