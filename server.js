@@ -37,6 +37,7 @@ const cloudflareAccessAud = process.env.CLOUDFLARE_ACCESS_AUD ?? '';
 const BCRYPT_ROUNDS = 12;
 const USER_TIERS = new Set(['user', 'gold', 'platinum', 'diamond']);
 const USER_ROLES = new Set(['user', 'admin']);
+const MAX_PROMO_DURATION_DAYS = 3650;
 const TIER_RANK = {
   user: 0,
   gold: 1,
@@ -96,6 +97,16 @@ function isValidPromoCode(code) {
 
 function addDays(date, days) {
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function isPermanentPromo(promo) {
+  return promo.expires_at === null
+    && promo.max_redemptions === null
+    && Number(promo.duration_days) === MAX_PROMO_DURATION_DAYS;
+}
+
+function serializePromoExpiresAt(value) {
+  return value === Infinity ? null : value;
 }
 
 // ── Cloudflare Access auth ──────────────────────────────────────────────────
@@ -288,7 +299,7 @@ async function serializeUser(user, db = pool) {
       code: activePromo.code,
       tier: normalizeUserTier(activePromo.tier),
       redeemedAt: activePromo.redeemed_at,
-      expiresAt: activePromo.expires_at,
+      expiresAt: serializePromoExpiresAt(activePromo.expires_at),
     } : null,
     role: resolveUserRole(user),
     createdAt: user.created_at,
@@ -504,7 +515,7 @@ async function redeemPromoCode(userId, rawCode, db = pool) {
     throw err;
   }
 
-  const expiresAt = addDays(new Date(), promo.duration_days);
+  const expiresAt = isPermanentPromo(promo) ? 'infinity' : addDays(new Date(), promo.duration_days);
   try {
     const { rows: redemptionRows } = await db.query(
       `INSERT INTO promo_redemptions (user_id, promo_code_id, tier, expires_at)
@@ -516,7 +527,7 @@ async function redeemPromoCode(userId, rawCode, db = pool) {
       code: promo.code,
       tier: normalizeUserTier(redemptionRows[0].tier),
       redeemedAt: redemptionRows[0].redeemed_at,
-      expiresAt: redemptionRows[0].expires_at,
+      expiresAt: serializePromoExpiresAt(redemptionRows[0].expires_at),
     };
   } catch (err) {
     if (err.code === '23505') {
@@ -886,8 +897,8 @@ app.post('/api/admin/promo-codes', requireDb, requireAuth, requireAdmin, async (
     if (!USER_TIERS.has(req.body?.tier)) {
       return res.status(400).json({ error: 'Promo tier must be user, gold, platinum, or diamond' });
     }
-    if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 3650) {
-      return res.status(400).json({ error: 'Duration must be 1–3650 days' });
+    if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > MAX_PROMO_DURATION_DAYS) {
+      return res.status(400).json({ error: `Duration must be 1–${MAX_PROMO_DURATION_DAYS} days` });
     }
     if (maxRedemptions !== null && (!Number.isInteger(maxRedemptions) || maxRedemptions < 1)) {
       return res.status(400).json({ error: 'Max redemptions must be blank or at least 1' });

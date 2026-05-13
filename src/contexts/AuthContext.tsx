@@ -16,7 +16,7 @@ export interface AuthUser {
     code: string;
     tier: UserTier;
     redeemedAt: string;
-    expiresAt: string;
+    expiresAt: string | null;
   } | null;
   createdAt?: string;
 }

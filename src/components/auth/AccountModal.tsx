@@ -34,6 +34,10 @@ function formatDate(value: string | null | undefined): string {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
 }
 
+function isPermanentPromoCode(code: AdminPromoCode): boolean {
+  return code.duration_days === 3650 && code.max_redemptions === null && code.expires_at === null;
+}
+
 export function AccountModal({ onClose }: AccountModalProps) {
   const { user, redeemPromoCode, refreshUser } = useAuth();
   const [redeemCode, setRedeemCode] = useState('');
@@ -137,7 +141,9 @@ export function AccountModal({ onClose }: AccountModalProps) {
             <span>Active promo</span>
             <strong>
               {user.activePromo
-                ? `${getTierLabel(user.activePromo.tier)} until ${formatDate(user.activePromo.expiresAt)}`
+                ? user.activePromo.expiresAt
+                  ? `${getTierLabel(user.activePromo.tier)} until ${formatDate(user.activePromo.expiresAt)}`
+                  : `${getTierLabel(user.activePromo.tier)} with no expiration`
                 : 'None'}
             </strong>
           </div>
@@ -204,7 +210,7 @@ export function AccountModal({ onClose }: AccountModalProps) {
               {adminCodes.slice(0, 8).map((code) => (
                 <div className="account-code-row" key={code.id}>
                   <strong>{code.code}</strong>
-                  <span>{getTierLabel(code.tier)} for {code.duration_days} days</span>
+                  <span>{isPermanentPromoCode(code) ? `${getTierLabel(code.tier)} permanent` : `${getTierLabel(code.tier)} for ${code.duration_days} days`}</span>
                   <span>{code.redeemed_count}{code.max_redemptions ? `/${code.max_redemptions}` : ''} used</span>
                   <span>{code.expires_at ? `Ends ${formatDate(code.expires_at)}` : 'No code expiration'}</span>
                 </div>
