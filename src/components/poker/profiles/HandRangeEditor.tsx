@@ -4,6 +4,7 @@ import { HAND_RANK_MAP, buildRangeFromPercentile } from '../../../data/poker/pro
 import type { RangeAction, RangeActionBucket, RangeBucketKind } from '../../../types/profiles';
 import {
   actionBucketFor,
+  bucketColorsFromAccent,
   defaultActionBuckets,
   makeThresholdBucket,
   nextBucketColorIndex,
@@ -12,6 +13,12 @@ import {
 // ─── Action config ────────────────────────────────────────────────────────────
 
 export const ACTION_CFG = Object.fromEntries(defaultActionBuckets(10, 1).map(bucket => [bucket.id, bucket]));
+
+const COLOR_INPUT_FALLBACK = '#40b2ff';
+
+function colorInputValue(color: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : COLOR_INPUT_FALLBACK;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -186,6 +193,14 @@ export function HandRangeEditor({
                   className="hre-bb-input"
                 />
                 <span className="hre-bucket-unit">BB</span>
+                <label className="hre-color-control" title={`Change ${bucket.label} color`}>
+                  <span className="sr-only">Change {bucket.label} color</span>
+                  <input
+                    type="color"
+                    value={colorInputValue(bucket.text)}
+                    onChange={e => updateBucket(bucket.id, bucketColorsFromAccent(e.target.value))}
+                  />
+                </label>
                 {!['limp', 'call'].includes(bucket.id) && (
                   <button className="hre-bucket-remove" onClick={() => removeBucket(bucket.id)} title="Remove bucket">
                     x
