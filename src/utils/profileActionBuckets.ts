@@ -9,6 +9,38 @@ const EXTRA_COLORS = [
   { bg: 'rgba(173,226,93,0.28)', border: 'rgba(173,226,93,0.68)', text: '#ade25d' },
 ];
 
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const clean = hex.trim().replace(/^#/, '');
+  const normalized = clean.length === 3
+    ? clean.split('').map(char => `${char}${char}`).join('')
+    : clean;
+
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return null;
+
+  return {
+    r: Number.parseInt(normalized.slice(0, 2), 16),
+    g: Number.parseInt(normalized.slice(2, 4), 16),
+    b: Number.parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+export function bucketColorsFromAccent(accent: string): Pick<RangeActionBucket, 'bg' | 'border' | 'text'> {
+  const rgb = hexToRgb(accent);
+  if (!rgb) {
+    return { bg: 'rgba(64,178,255,0.28)', border: 'rgba(64,178,255,0.68)', text: '#40b2ff' };
+  }
+
+  const text = `#${[rgb.r, rgb.g, rgb.b]
+    .map(value => value.toString(16).padStart(2, '0'))
+    .join('')}`;
+
+  return {
+    bg: `rgba(${rgb.r},${rgb.g},${rgb.b},0.28)`,
+    border: `rgba(${rgb.r},${rgb.g},${rgb.b},0.68)`,
+    text,
+  };
+}
+
 const DEFAULT_FOLD: RangeActionBucket = {
   id: 'fold',
   kind: 'fold',
