@@ -22,6 +22,8 @@ import { PokerDrillRouter } from './components/poker/PokerDrillRouter';
 import { PokerDashboard } from './components/poker/PokerDashboard';
 import { ProfilesHome } from './components/poker/profiles/ProfilesHome';
 import { HandLookup } from './components/poker/HandLookup';
+import { DealSimulator } from './components/poker/DealSimulator';
+import { AsyncPokerHome } from './components/poker/async/AsyncPokerHome';
 import { LiveSessionsHome } from './components/poker/live/LiveSessionsHome';
 import { LiveSessionActive } from './components/poker/live/LiveSessionActive';
 import { usePlayerProfiles } from './hooks/usePlayerProfiles';
@@ -34,7 +36,7 @@ import { FEATURE_TIERS, POKER_DRILL_TIERS } from './data/featureTiers';
 import { canAccessTier, getTierLabel } from './types/tiers';
 
 const CHESS_VIEWS: AppView[] = ['chess_home', 'opening_detail', 'practice', 'challenge', 'dashboard'];
-const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drills', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup', 'poker_live_home', 'poker_live_active'];
+const POKER_VIEWS: AppView[] = ['poker_home', 'poker_drills', 'poker_drill', 'poker_dashboard', 'poker_profiles', 'poker_hand_lookup', 'poker_deal_simulator', 'poker_async', 'poker_live_home', 'poker_live_active'];
 const BLACKJACK_VIEWS: AppView[] = ['blackjack_home', 'blackjack_drill', 'blackjack_dashboard'];
 
 const POKER_DRILL_NAMES: Record<PokerDrillType, string> = {
@@ -53,6 +55,15 @@ function getInitialTheme(): 'dark' | 'light' {
     if (stored === 'light' || stored === 'dark') return stored;
   } catch { /* ignore */ }
   return 'dark';
+}
+
+function hasAsyncPokerInviteLink() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return Boolean(params.get('asyncPokerGame'));
+  } catch {
+    return false;
+  }
 }
 
 // ── Nav auth button ───────────────────────────────────────────────────────────
@@ -203,7 +214,7 @@ function FeedbackModal({ onClose }: { onClose: () => void }) {
 function AppInner() {
   const { user } = useAuth();
   const [theme, setTheme] = useState<'dark' | 'light'>(getInitialTheme);
-  const [view, setView] = useState<AppView>('home');
+  const [view, setView] = useState<AppView>(() => hasAsyncPokerInviteLink() ? 'poker_async' : 'home');
   const [showAuth, setShowAuth] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -242,6 +253,7 @@ function AppInner() {
   useEffect(() => {
     const lockedViews: Partial<Record<AppView, { featureName: string; requiredTier: UserTier }>> = {
       poker_hand_lookup: { featureName: 'What Should I Do?', requiredTier: FEATURE_TIERS.pokerHandLookup },
+      poker_deal_simulator: { featureName: 'Deal Simulator', requiredTier: FEATURE_TIERS.pokerLiveSession },
       poker_live_home: { featureName: 'Live Session Tracker', requiredTier: FEATURE_TIERS.pokerLiveSession },
       poker_live_active: { featureName: 'Live Session Tracker', requiredTier: FEATURE_TIERS.pokerLiveSession },
     };
@@ -373,6 +385,18 @@ function AppInner() {
                 Hand Lookup
               </button>
               <button
+                className={`nav-link ${view === 'poker_deal_simulator' ? 'active' : ''}`}
+                onClick={() => requireTier(FEATURE_TIERS.pokerLiveSession, 'Deal Simulator', () => setView('poker_deal_simulator'))}
+              >
+                Deal Simulator
+              </button>
+              <button
+                className={`nav-link ${view === 'poker_async' ? 'active' : ''}`}
+                onClick={() => setView('poker_async')}
+              >
+                Async Poker
+              </button>
+              <button
                 className={`nav-link ${view === 'poker_live_home' || view === 'poker_live_active' ? 'active' : ''}`}
                 onClick={() => requireTier(FEATURE_TIERS.pokerLiveSession, 'Live Session Tracker', () => setView('poker_live_home'))}
               >
@@ -488,6 +512,8 @@ function AppInner() {
             onViewDrills={() => setView('poker_drills')}
             onViewProfiles={() => setView('poker_profiles')}
             onViewHandLookup={() => requireTier(FEATURE_TIERS.pokerHandLookup, 'What Should I Do?', () => setView('poker_hand_lookup'))}
+            onViewDealSimulator={() => requireTier(FEATURE_TIERS.pokerLiveSession, 'Deal Simulator', () => setView('poker_deal_simulator'))}
+            onViewAsyncPoker={() => setView('poker_async')}
             onViewLiveSession={() => requireTier(FEATURE_TIERS.pokerLiveSession, 'Live Session Tracker', () => setView('poker_live_home'))}
             onBack={() => setView('home')}
           />
@@ -535,6 +561,24 @@ function AppInner() {
           <HandLookup
             profiles={profiles}
             onBack={() => setView('poker_home')}
+          />
+        )}
+
+        {view === 'poker_deal_simulator' && (
+          <DealSimulator
+            profiles={profiles}
+            onBack={() => setView('poker_home')}
+          />
+        )}
+
+        {view === 'poker_async' && (
+          <AsyncPokerHome
+            profiles={profiles}
+            onCreateProfile={(name, tableSize) =>
+              createBlankProfile(name, 'villain', tableSize, 20, 20)
+            }
+            onBack={() => setView('poker_home')}
+            onRequireAuth={() => setShowAuth(true)}
           />
         )}
 
