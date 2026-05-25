@@ -68,6 +68,24 @@ describe('liveHandEngine', () => {
     expect(raiser.canRaise).toBe(true);
   });
 
+  it('computes minimum raise targets from the previous bet or raise delta', () => {
+    let actions: LiveHandAction[] = [];
+    actions = appendLiveAction({ actions, street: 'flop', seatId: 0, action: 'bet', amountBB: 30 });
+    actions = appendLiveAction({ actions, street: 'flop', seatId: 1, action: 'call', amountBB: 30 });
+
+    const afterOpen = actionSummary(actions, 'flop', 2);
+    expect(afterOpen.minRaiseDeltaBB).toBe(30);
+    expect(afterOpen.minRaiseToBB).toBe(60);
+
+    actions = appendLiveAction({ actions, street: 'flop', seatId: 2, action: 'raise', amountBB: 90 });
+    actions = appendLiveAction({ actions, street: 'flop', seatId: 0, action: 'call', amountBB: 60 });
+
+    const afterLargeRaise = actionSummary(actions, 'flop', 1);
+    expect(afterLargeRaise.currentBetBB).toBe(90);
+    expect(afterLargeRaise.minRaiseDeltaBB).toBe(60);
+    expect(afterLargeRaise.minRaiseToBB).toBe(150);
+  });
+
   it('updates stacks for action costs and pot distribution', () => {
     const stacks: LiveStackSnapshot[] = [
       stack(0, 'hero', 100),

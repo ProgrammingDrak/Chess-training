@@ -3,6 +3,8 @@ interface PokerHomeProps {
   onViewDrills: () => void;
   onViewProfiles: () => void;
   onViewHandLookup: () => void;
+  onViewDealSimulator: () => void;
+  onViewAsyncPoker: () => void;
   onViewLiveSession: () => void;
   onBack: () => void;
 }
@@ -12,6 +14,8 @@ export function PokerHome({
   onViewDrills,
   onViewProfiles,
   onViewHandLookup,
+  onViewDealSimulator,
+  onViewAsyncPoker,
   onViewLiveSession,
 }: PokerHomeProps) {
   return (
@@ -72,6 +76,40 @@ export function PokerHome({
           <div className="drill-module-desc">
             Build hand-range profiles for Hero and opponents. 4-color action grid (fold/limp/call/raise),
             per-position ranges, post-flop thresholds. Use them to benchmark decisions against any playing style.
+          </div>
+        </div>
+        <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
+      </button>
+      <button
+        className="drill-module-card"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
+        onClick={onViewDealSimulator}
+      >
+        <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>DL</div>
+        <div style={{ flex: 1 }}>
+          <div className="drill-module-name">
+            Deal Simulator
+          </div>
+          <div className="drill-module-desc">
+            Play a simulated Hold'em hand from Hero's seat using the same live table,
+            board, action flow, and pot-odds controls as the tracker.
+          </div>
+        </div>
+        <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>
+      </button>
+      <button
+        className="drill-module-card"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 16, textAlign: 'left', justifyContent: 'flex-start' }}
+        onClick={onViewAsyncPoker}
+      >
+        <div className="drill-module-icon" style={{ fontSize: '1.6rem', flexShrink: 0 }}>AS</div>
+        <div style={{ flex: 1 }}>
+          <div className="drill-module-name">
+            Async Poker
+          </div>
+          <div className="drill-module-desc">
+            Host turn-based poker tables with timers from bullet pace to multi-day games,
+            player seats, in-app turn alerts, email opt-ins, and Discord mentions.
           </div>
         </div>
         <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)', flexShrink: 0 }}>→</div>

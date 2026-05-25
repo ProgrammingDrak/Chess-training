@@ -1,5 +1,8 @@
 node_modules/
 dist/
+.vision-debug/
+db/dumps/
+.local-postgres/
 *.log
 *.local
 *.local.json

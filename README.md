@@ -30,8 +30,35 @@ A training platform for mastering Game Theory Optimal play in chess, poker, and 
 ```bash
 npm install
 npm run dev       # Start dev server
+npm run dev:server:local  # Start API against .env.local
 npm test          # Run tests (570 tests)
 npm run build     # Production build
+```
+
+## Local production database refresh
+
+Use this when you need realistic account/session/profile data locally.
+
+```powershell
+npm run db:local:refresh
+npm run dev:server:local
+```
+
+`db:local:refresh` starts the repo-local Postgres instance in `.local-postgres/` on port `55432`, dumps the app-owned `public` schema from production with `pg_dump`, recreates `gto_training_local`, restores the dump, applies `db/schema.sql`, and writes `.env.local` with the local `DATABASE_URL`.
+
+Source and target URLs:
+
+- Production source: `PROD_DATABASE_URL`, then `DATABASE_URL`, then `-ProdDatabaseUrl`
+- Local target: `LOCAL_DATABASE_URL`, then `postgresql://postgres@127.0.0.1:55432/gto_training_local`
+
+The refresh is destructive to the local database only. Dump files are stored under `db/dumps/` while the script runs and removed afterward unless you pass `-KeepDump`.
+
+Useful variants:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ./scripts/refresh-local-db.ps1 -KeepDump
+powershell -ExecutionPolicy Bypass -File ./scripts/refresh-local-db.ps1 -SkipDump -DumpFile ./db/dumps/prod-YYYYMMDD-HHMMSS.dump
+powershell -ExecutionPolicy Bypass -File ./scripts/refresh-local-db.ps1 -Schemas public,extensions
 ```
 
 ## Admins and notifications

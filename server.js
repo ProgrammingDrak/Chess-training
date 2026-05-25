@@ -23,6 +23,17 @@ import { createPublicKey, createVerify, randomUUID } from 'crypto';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import {
+  appendLiveAction,
+  actionSummary,
+  blindSeatsForButton,
+  createForcedBlindActions,
+  firstPreflopActor,
+  nextClockwise,
+  nextGuidedActionState,
+  totalPotBB,
+  unfoldedSeats,
+} from './src/utils/pokerGameplay.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -39,6 +50,14 @@ const USER_TIERS = new Set(['user', 'gold', 'platinum', 'diamond']);
 const DEFAULT_USER_TIER = 'diamond';
 const USER_ROLES = new Set(['user', 'admin']);
 const MAX_PROMO_DURATION_DAYS = 3650;
+const ASYNC_POKER_ACTIONS = new Set(['check', 'call', 'bet', 'raise', 'fold', 'pass']);
+const ASYNC_POKER_STREETS = ['preflop', 'flop', 'turn', 'river'];
+const ASYNC_POKER_RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
+const ASYNC_POKER_SUITS = ['h', 'd', 'c', 's'];
+const ASYNC_POKER_MIN_TURN_SECONDS = 5;
+const ASYNC_POKER_MAX_TURN_SECONDS = 5 * 24 * 60 * 60;
+const ASYNC_POKER_DEFAULT_STACK = 1000;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TIER_RANK = {
   user: 0,
   gold: 1,
@@ -793,6 +812,1087 @@ async function sendWelcomeEmail(user) {
   }
 }
 
+// ── Async poker notifications ───────────────────────────────────────────────
+
+function normalizeDiscordUserId(value) {
+  if (typeof value !== 'string') return null;
+  const digits = value.trim().replace(/[<@!>]/g, '');
+  return /^\d{5,30}$/.test(digits) ? digits : null;
+}
+
+function normalizeTurnSeconds(value) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isInteger(parsed)) return 24 * 60 * 60;
+  return Math.min(ASYNC_POKER_MAX_TURN_SECONDS, Math.max(ASYNC_POKER_MIN_TURN_SECONDS, parsed));
+}
+
+function isValidUuid(value) {
+  return typeof value === 'string' && UUID_PATTERN.test(value);
+}
+
+function normalizeTableSize(value) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isInteger(parsed)) return 6;
+  return Math.min(9, Math.max(2, parsed));
+}
+
+function serializeNotificationPreference(row) {
+  return {
+    emailTurnNotifications: Boolean(row.email_turn_notifications),
+    discordTurnNotifications: Boolean(row.discord_turn_notifications),
+    discordUserId: row.discord_user_id ?? '',
+    discordConfigured: Boolean(process.env.DISCORD_TURN_WEBHOOK_URL),
+  };
+}
+
+async function getNotificationPreference(userId, db = pool) {
+  await db.query(
+    `INSERT INTO notification_preferences (user_id)
+     VALUES ($1)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId]
+  );
+  const { rows } = await db.query(
+    `SELECT email_turn_notifications, discord_turn_notifications, discord_user_id
+     FROM notification_preferences
+     WHERE user_id = $1`,
+    [userId]
+  );
+  return rows[0];
+}
+
+async function createInAppNotification(db, { userId, type, title, body, actionPath = null, metadata = {} }) {
+  await db.query(
+    `INSERT INTO in_app_notifications (user_id, type, title, body, action_path, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [userId, type, title, body, actionPath, metadata]
+  );
+}
+
+async function sendDiscordTurnMessage(discordUserId, game) {
+  const webhookUrl = process.env.DISCORD_TURN_WEBHOOK_URL;
+  if (!webhookUrl || !discordUserId) {
+    return { sent: false, reason: webhookUrl ? 'no_discord_user_id' : 'discord_webhook_not_configured' };
+  }
+
+  const response = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: `<@${discordUserId}> your turn is up in ${game.name}. Turn timer: ${formatTurnDuration(game.turn_seconds)}.`,
+      allowed_mentions: { users: [discordUserId] },
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => '');
+    throw new Error(`Discord webhook failed with HTTP ${response.status}: ${details}`);
+  }
+  return { sent: true };
+}
+
+function formatTurnDuration(seconds) {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
+  return `${Math.round(seconds / 86400)}d`;
+}
+
+function notificationTurnStartedSql() {
+  return "to_char(g.current_turn_started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')";
+}
+
+async function markAsyncPokerTurnNotificationsRead(db, { gameId, userId, turnStartedAt = null }) {
+  await db.query(
+    `UPDATE in_app_notifications
+     SET read_at = COALESCE(read_at, NOW())
+     WHERE user_id = $1
+       AND type IN ('async_poker_turn', 'async_poker_turn_reminder')
+       AND read_at IS NULL
+       AND metadata->>'asyncPokerGameId' = $2
+       AND ($3::text IS NULL OR metadata->>'turnStartedAt' = $3)`,
+    [userId, String(gameId), turnStartedAt]
+  );
+}
+
+async function notifyAsyncPokerTurn(db, gameId, userId, options = {}) {
+  const { rows } = await db.query(
+    `SELECT g.id, g.name, g.turn_seconds, g.current_turn_started_at, g.current_turn_expires_at,
+            u.id AS user_id, u.username, u.email, u.is_npc,
+            COALESCE(np.email_turn_notifications, false) AS email_turn_notifications,
+            COALESCE(np.discord_turn_notifications, false) AS discord_turn_notifications,
+            np.discord_user_id
+     FROM async_poker_games g
+     JOIN users u ON u.id = $2
+     LEFT JOIN notification_preferences np ON np.user_id = u.id
+     WHERE g.id = $1`,
+    [gameId, userId]
+  );
+  const row = rows[0];
+  if (!row) return;
+  if (row.is_npc) return;
+
+  await markAsyncPokerTurnNotificationsRead(db, { gameId, userId });
+
+  const isReminder = options.reminder === true;
+  const type = isReminder ? 'async_poker_turn_reminder' : 'async_poker_turn';
+  const metadata = {
+    asyncPokerGameId: String(gameId),
+    turnStartedAt: row.current_turn_started_at ? new Date(row.current_turn_started_at).toISOString() : null,
+    turnExpiresAt: row.current_turn_expires_at ? new Date(row.current_turn_expires_at).toISOString() : null,
+    reminder: isReminder,
+  };
+  const body = isReminder
+    ? `Still your turn in ${row.name}. About 10 minutes left to act.`
+    : `It is your turn in ${row.name}. You have ${formatTurnDuration(row.turn_seconds)} to act.`;
+  await createInAppNotification(db, {
+    userId,
+    type,
+    title: isReminder ? 'Poker turn ending soon' : 'Your poker turn',
+    body,
+    actionPath: `poker_async?asyncPokerGame=${gameId}`,
+    metadata,
+  });
+
+  if (row.email_turn_notifications && row.email) {
+    try {
+      await sendEmail({
+        to: row.email,
+        subject: `[GTO Training] Your turn in ${row.name}`,
+        text: [
+          `Hi ${row.username},`,
+          '',
+          body,
+          '',
+          isReminder
+            ? 'Open GTO Training and go to Async Poker before the turn expires.'
+            : 'Open GTO Training and go to Async Poker to act.',
+        ].join('\n'),
+      });
+    } catch (err) {
+      console.warn('[async-poker] turn email failed:', err.message);
+    }
+  }
+
+  const discordUserId = normalizeDiscordUserId(row.discord_user_id);
+  if (row.discord_turn_notifications && discordUserId) {
+    try {
+      await sendDiscordTurnMessage(discordUserId, row);
+    } catch (err) {
+      console.warn('[async-poker] discord notification failed:', err.message);
+    }
+  }
+}
+
+async function refreshAsyncPokerTurnReminders(userId, db = pool) {
+  const turnStartedSql = notificationTurnStartedSql();
+  const { rows } = await db.query(
+    `SELECT g.id
+     FROM async_poker_games g
+     WHERE g.status = 'active'
+       AND g.current_player_user_id = $1
+       AND g.current_turn_expires_at IS NOT NULL
+       AND g.current_turn_expires_at > NOW()
+       AND g.current_turn_expires_at <= NOW() + INTERVAL '10 minutes'
+       AND NOT EXISTS (
+         SELECT 1
+         FROM in_app_notifications n
+         WHERE n.user_id = $1
+           AND n.type = 'async_poker_turn_reminder'
+           AND n.metadata->>'asyncPokerGameId' = g.id::text
+           AND n.metadata->>'turnStartedAt' = ${turnStartedSql}
+       )`,
+    [userId]
+  );
+
+  for (const row of rows) {
+    await notifyAsyncPokerTurn(db, row.id, userId, { reminder: true });
+  }
+}
+
+async function clearStaleAsyncPokerTurnNotifications(userId, db = pool) {
+  const turnStartedSql = notificationTurnStartedSql();
+  await db.query(
+    `UPDATE in_app_notifications n
+     SET read_at = COALESCE(n.read_at, NOW())
+     WHERE n.user_id = $1
+       AND n.read_at IS NULL
+       AND n.type IN ('async_poker_turn', 'async_poker_turn_reminder')
+       AND NOT EXISTS (
+         SELECT 1
+         FROM async_poker_games g
+         WHERE g.id::text = n.metadata->>'asyncPokerGameId'
+           AND g.status = 'active'
+           AND g.current_player_user_id = n.user_id
+           AND (
+             n.metadata->>'turnStartedAt' IS NULL
+             OR n.metadata->>'turnStartedAt' = ${turnStartedSql}
+           )
+       )`,
+    [userId]
+  );
+}
+
+function normalizeAsyncPokerHandState(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const street = [...ASYNC_POKER_STREETS, 'showdown'].includes(source.street) ? source.street : 'preflop';
+  const streetActions = source.streetActions && typeof source.streetActions === 'object' && !Array.isArray(source.streetActions)
+    ? source.streetActions
+    : {};
+  const pendingActions = source.pendingActions && typeof source.pendingActions === 'object' && !Array.isArray(source.pendingActions)
+    ? source.pendingActions
+    : {};
+
+  return {
+    ...source,
+    street,
+    deck: Array.isArray(source.deck) ? source.deck : [],
+    board: Array.isArray(source.board) ? source.board : [],
+    actions: Array.isArray(source.actions) ? source.actions : [],
+    previousHandResult: source.previousHandResult && typeof source.previousHandResult === 'object' && !Array.isArray(source.previousHandResult)
+      ? source.previousHandResult
+      : null,
+    holeCards: source.holeCards && typeof source.holeCards === 'object' && !Array.isArray(source.holeCards)
+      ? source.holeCards
+      : {},
+    pendingActions,
+    foldedUserIds: Array.isArray(source.foldedUserIds) ? source.foldedUserIds : [],
+    streetActions: Object.fromEntries(
+      ASYNC_POKER_STREETS.map((name) => [
+        name,
+        Array.isArray(streetActions[name]) ? streetActions[name] : [],
+      ])
+    ),
+    winnerUserIds: Array.isArray(source.winnerUserIds) ? source.winnerUserIds : [],
+    shownUserIds: Array.isArray(source.shownUserIds) ? source.shownUserIds : [],
+    nextHandReadyUserIds: Array.isArray(source.nextHandReadyUserIds) ? source.nextHandReadyUserIds : [],
+  };
+}
+
+function sanitizeAsyncPokerState(state, viewerUserId, extraVisibleUserIds = []) {
+  const normalized = normalizeAsyncPokerHandState(state);
+  const { deck, holeCards, pendingActions, ...safeState } = normalized;
+  const viewerKey = String(viewerUserId);
+  const visibleUserIds = new Set([
+    ...(normalized.shownUserIds ?? []).map(String),
+    ...extraVisibleUserIds.map(String),
+  ]);
+  const visibleHoleCards = {};
+
+  if (Array.isArray(holeCards[viewerKey])) {
+    visibleHoleCards[viewerKey] = holeCards[viewerKey];
+  }
+  for (const [userId, cards] of Object.entries(holeCards)) {
+    if (visibleUserIds.has(String(userId)) && Array.isArray(cards)) visibleHoleCards[userId] = cards;
+  }
+
+  return {
+    ...safeState,
+    holeCards: visibleHoleCards,
+    pendingActions: Object.fromEntries(
+      [viewerKey, ...extraVisibleUserIds.map(String)]
+        .filter((userId) => pendingActions?.[userId])
+        .map((userId) => [userId, pendingActions[userId]])
+    ),
+  };
+}
+
+function createAsyncPokerDeck() {
+  return ASYNC_POKER_RANKS.flatMap((rank) => ASYNC_POKER_SUITS.map((suit) => ({ rank, suit })));
+}
+
+function shuffleAsyncPokerDeck(deck) {
+  const cards = [...deck];
+  for (let index = cards.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [cards[index], cards[swapIndex]] = [cards[swapIndex], cards[index]];
+  }
+  return cards;
+}
+
+function createAsyncPokerHandState(players, {
+  tableSize,
+  buttonSeat,
+  smallBlindChips,
+  bigBlindChips,
+}) {
+  const deck = shuffleAsyncPokerDeck(createAsyncPokerDeck());
+  const sortedPlayers = [...players].sort((a, b) => a.seat_index - b.seat_index);
+  const holeCards = {};
+  const seatedPlayers = sortedPlayers.map((player) => player.seat_index);
+  const effectiveButtonSeat = buttonSeat ?? seatedPlayers[0] ?? null;
+  const { smallBlindSeat, bigBlindSeat } = blindSeatsForButton({
+    buttonSeat: effectiveButtonSeat,
+    seatedPlayers,
+    tableSize,
+  });
+  const playerIdBySeat = new Map(sortedPlayers.map((player) => [player.seat_index, String(player.user_id)]));
+  const actions = createForcedBlindActions({
+    baseActions: [],
+    smallBlindSeat,
+    bigBlindSeat,
+    smallBlind: smallBlindChips,
+    bigBlind: bigBlindChips,
+    currency: '',
+    playerIdBySeat,
+  });
+
+  for (let round = 0; round < 2; round += 1) {
+    for (const player of sortedPlayers) {
+      const key = String(player.user_id);
+      holeCards[key] = holeCards[key] ?? [];
+      holeCards[key].push(deck.pop());
+    }
+  }
+
+  return {
+    street: 'preflop',
+    deck,
+    board: [],
+    actions,
+    buttonSeat: effectiveButtonSeat,
+    smallBlindSeat,
+    bigBlindSeat,
+    holeCards,
+    foldedUserIds: [],
+    shownUserIds: [],
+    nextHandReadyUserIds: [],
+    pendingActions: {},
+    streetActions: {
+      preflop: [],
+      flop: [],
+      turn: [],
+      river: [],
+    },
+    winnerUserIds: [],
+    resolvedAt: null,
+  };
+}
+
+function createPreviousAsyncPokerHandResult(state, handNumber, potChips = null) {
+  const shownUserIds = new Set((state.shownUserIds ?? []).map(Number));
+  const visibleHoleCards = {};
+  for (const userId of shownUserIds) {
+    const cards = state.holeCards?.[String(userId)];
+    if (Array.isArray(cards)) visibleHoleCards[String(userId)] = cards;
+  }
+
+  return {
+    handNumber,
+    resolvedAt: state.resolvedAt,
+    resolutionReason: state.resolutionReason,
+    board: state.board ?? [],
+    actions: state.actions ?? [],
+    potChips,
+    winnerUserIds: state.winnerUserIds ?? [],
+    winnerUserId: state.winnerUserId ?? null,
+    showdown: state.showdown ?? {},
+    shownUserIds: [...shownUserIds],
+    holeCards: visibleHoleCards,
+  };
+}
+
+function withoutPendingAsyncPokerAction(state, userId) {
+  const pendingActions = { ...(state.pendingActions ?? {}) };
+  delete pendingActions[String(userId)];
+  return { ...state, pendingActions };
+}
+
+async function dealAsyncPokerHand(db, {
+  gameId,
+  game,
+  players,
+  buttonSeat,
+  handNumberIncrement = 0,
+}) {
+  const handState = createAsyncPokerHandState(players, {
+    tableSize: game.table_size,
+    buttonSeat,
+    smallBlindChips: game.small_blind_chips,
+    bigBlindChips: game.big_blind_chips,
+  });
+  const seatedPlayers = players.map((player) => player.seat_index).sort((a, b) => a - b);
+  const firstPlayerSeat = firstPreflopActor({
+    seatedPlayers,
+    tableSize: game.table_size,
+    bigBlindSeat: handState.bigBlindSeat,
+  });
+  const firstPlayerId = players.find((player) => player.seat_index === firstPlayerSeat)?.user_id
+    ?? players[0]?.user_id
+    ?? null;
+
+  if (handState.smallBlindSeat !== null) {
+    const smallBlindPlayer = players.find((player) => player.seat_index === handState.smallBlindSeat);
+    if (smallBlindPlayer) {
+      await db.query(
+        `UPDATE async_poker_game_players
+         SET stack_chips = GREATEST(stack_chips - $3, 0)
+         WHERE game_id = $1 AND user_id = $2`,
+        [gameId, smallBlindPlayer.user_id, game.small_blind_chips]
+      );
+    }
+  }
+  if (handState.bigBlindSeat !== null) {
+    const bigBlindPlayer = players.find((player) => player.seat_index === handState.bigBlindSeat);
+    if (bigBlindPlayer) {
+      await db.query(
+        `UPDATE async_poker_game_players
+         SET stack_chips = GREATEST(stack_chips - $3, 0)
+         WHERE game_id = $1 AND user_id = $2`,
+        [gameId, bigBlindPlayer.user_id, game.big_blind_chips]
+      );
+    }
+  }
+
+  const startingPotChips = Math.round(totalPotBB(handState.actions) * game.big_blind_chips);
+  await db.query(
+    `UPDATE async_poker_games
+     SET status = 'active',
+         current_player_user_id = $2,
+         current_turn_started_at = NOW(),
+         current_turn_expires_at = NOW() + ($3 || ' seconds')::interval,
+         hand_number = hand_number + $6,
+         state = $4,
+         pot_chips = $5,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [gameId, firstPlayerId, game.turn_seconds, handState, startingPotChips, handNumberIncrement]
+  );
+  return { handState, firstPlayerId };
+}
+
+function activeAsyncPokerPlayers(players, state) {
+  const folded = new Set((state.foldedUserIds ?? []).map(Number));
+  return players
+    .filter((player) => player.status === 'active' && !folded.has(Number(player.user_id)))
+    .sort((a, b) => a.seat_index - b.seat_index);
+}
+
+function firstAsyncPokerActor(players, state) {
+  return activeAsyncPokerPlayers(players, state)[0] ?? null;
+}
+
+function nextAsyncPokerActor(players, state, actorUserId) {
+  const activePlayers = activeAsyncPokerPlayers(players, state);
+  if (activePlayers.length === 0) return null;
+  const actorSeat = players.find((player) => Number(player.user_id) === Number(actorUserId))?.seat_index
+    ?? activePlayers[0].seat_index;
+  return activePlayers.find((player) => player.seat_index > actorSeat) ?? activePlayers[0];
+}
+
+function isAsyncPokerStreetComplete(players, state) {
+  const activePlayers = activeAsyncPokerPlayers(players, state);
+  const acted = new Set((state.streetActions?.[state.street] ?? []).map(Number));
+  return activePlayers.length > 0 && activePlayers.every((player) => acted.has(Number(player.user_id)));
+}
+
+function drawAsyncPokerCards(state, count) {
+  const deck = [...state.deck];
+  deck.pop();
+  const cards = deck.splice(Math.max(0, deck.length - count), count);
+  return { deck, cards };
+}
+
+const ASYNC_POKER_RANK_VALUE = {
+  2: 2,
+  3: 3,
+  4: 4,
+  5: 5,
+  6: 6,
+  7: 7,
+  8: 8,
+  9: 9,
+  T: 10,
+  J: 11,
+  Q: 12,
+  K: 13,
+  A: 14,
+};
+
+const ASYNC_POKER_HAND_LABELS = [
+  'high card',
+  'pair',
+  'two pair',
+  'three of a kind',
+  'straight',
+  'flush',
+  'full house',
+  'four of a kind',
+  'straight flush',
+];
+
+function compareAsyncPokerScores(a, b) {
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    const diff = (a[index] ?? 0) - (b[index] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function straightHighFromRanks(ranks) {
+  const unique = [...new Set(ranks)].sort((a, b) => b - a);
+  if (unique.includes(14) && unique.includes(5) && unique.includes(4) && unique.includes(3) && unique.includes(2)) {
+    return 5;
+  }
+  for (let index = 0; index <= unique.length - 5; index += 1) {
+    const slice = unique.slice(index, index + 5);
+    if (slice[0] - slice[4] === 4) return slice[0];
+  }
+  return null;
+}
+
+function scoreFiveAsyncPokerCards(cards) {
+  const ranks = cards.map((card) => ASYNC_POKER_RANK_VALUE[card.rank]).filter(Boolean).sort((a, b) => b - a);
+  const flush = cards.every((card) => card.suit === cards[0]?.suit);
+  const straightHigh = straightHighFromRanks(ranks);
+  const counts = new Map();
+  for (const rank of ranks) counts.set(rank, (counts.get(rank) ?? 0) + 1);
+  const groups = [...counts.entries()]
+    .map(([rank, count]) => ({ rank, count }))
+    .sort((a, b) => b.count - a.count || b.rank - a.rank);
+
+  if (flush && straightHigh) return { score: [8, straightHigh], label: ASYNC_POKER_HAND_LABELS[8] };
+  if (groups[0]?.count === 4) {
+    return { score: [7, groups[0].rank, groups.find((group) => group.count === 1)?.rank ?? 0], label: ASYNC_POKER_HAND_LABELS[7] };
+  }
+  if (groups[0]?.count === 3 && groups[1]?.count === 2) {
+    return { score: [6, groups[0].rank, groups[1].rank], label: ASYNC_POKER_HAND_LABELS[6] };
+  }
+  if (flush) return { score: [5, ...ranks], label: ASYNC_POKER_HAND_LABELS[5] };
+  if (straightHigh) return { score: [4, straightHigh], label: ASYNC_POKER_HAND_LABELS[4] };
+  if (groups[0]?.count === 3) {
+    return {
+      score: [3, groups[0].rank, ...groups.filter((group) => group.count === 1).map((group) => group.rank).slice(0, 2)],
+      label: ASYNC_POKER_HAND_LABELS[3],
+    };
+  }
+  if (groups[0]?.count === 2 && groups[1]?.count === 2) {
+    return {
+      score: [2, groups[0].rank, groups[1].rank, groups.find((group) => group.count === 1)?.rank ?? 0],
+      label: ASYNC_POKER_HAND_LABELS[2],
+    };
+  }
+  if (groups[0]?.count === 2) {
+    return {
+      score: [1, groups[0].rank, ...groups.filter((group) => group.count === 1).map((group) => group.rank).slice(0, 3)],
+      label: ASYNC_POKER_HAND_LABELS[1],
+    };
+  }
+  return { score: [0, ...ranks], label: ASYNC_POKER_HAND_LABELS[0] };
+}
+
+function evaluateAsyncPokerHand(cards) {
+  let best = null;
+  for (let a = 0; a < cards.length - 4; a += 1) {
+    for (let b = a + 1; b < cards.length - 3; b += 1) {
+      for (let c = b + 1; c < cards.length - 2; c += 1) {
+        for (let d = c + 1; d < cards.length - 1; d += 1) {
+          for (let e = d + 1; e < cards.length; e += 1) {
+            const score = scoreFiveAsyncPokerCards([cards[a], cards[b], cards[c], cards[d], cards[e]]);
+            if (!best || compareAsyncPokerScores(score.score, best.score) > 0) best = score;
+          }
+        }
+      }
+    }
+  }
+  return best ?? { score: [0], label: ASYNC_POKER_HAND_LABELS[0] };
+}
+
+function resolveAsyncPokerHand(state, activePlayers, reason) {
+  const shownUserIds = reason === 'showdown'
+    ? activePlayers.map((player) => player.user_id)
+    : [];
+  if (activePlayers.length === 1) {
+    return {
+      ...state,
+      street: 'showdown',
+      winnerUserIds: [activePlayers[0].user_id],
+      winnerUserId: activePlayers[0].user_id,
+      shownUserIds,
+      nextHandReadyUserIds: [],
+      resolutionReason: reason,
+      resolvedAt: new Date().toISOString(),
+    };
+  }
+
+  const showdown = {};
+  let bestScore = null;
+  let winners = [];
+  for (const player of activePlayers) {
+    const cards = [
+      ...(state.holeCards?.[String(player.user_id)] ?? []),
+      ...(state.board ?? []),
+    ];
+    const result = evaluateAsyncPokerHand(cards);
+    showdown[String(player.user_id)] = { label: result.label };
+    const comparison = bestScore ? compareAsyncPokerScores(result.score, bestScore) : 1;
+    if (comparison > 0) {
+      bestScore = result.score;
+      winners = [player.user_id];
+    } else if (comparison === 0) {
+      winners.push(player.user_id);
+    }
+  }
+
+  return {
+    ...state,
+    street: 'showdown',
+    winnerUserIds: winners,
+    winnerUserId: winners[0] ?? null,
+    showdown,
+    shownUserIds,
+    nextHandReadyUserIds: [],
+    resolutionReason: reason,
+    resolvedAt: new Date().toISOString(),
+  };
+}
+
+async function advanceAsyncPokerTurn(db, gameId, actorUserId, action) {
+  const { rows: gameRows } = await db.query(
+    'SELECT table_size, turn_seconds, hand_number, state, small_blind_chips, big_blind_chips FROM async_poker_games WHERE id = $1 FOR UPDATE',
+    [gameId]
+  );
+  const game = gameRows[0];
+  const { rows: players } = await db.query(
+    `SELECT user_id, seat_index, status
+     FROM async_poker_game_players
+     WHERE game_id = $1
+     ORDER BY seat_index`,
+    [gameId]
+  );
+  let state = withoutPendingAsyncPokerAction(normalizeAsyncPokerHandState(game?.state), actorUserId);
+  const actor = players.find((player) => Number(player.user_id) === Number(actorUserId));
+  if (!actor) return null;
+
+  const amountChips = Number.isInteger(action.amountChips) ? action.amountChips : undefined;
+  const liveAction = action.name === 'pass' ? 'check' : action.name;
+  const nextActions = appendLiveAction({
+    actions: state.actions,
+    street: state.street,
+    seatId: actor.seat_index,
+    playerProfileId: String(actor.user_id),
+    action: liveAction,
+    ...(amountChips !== undefined ? {
+      amount: amountChips,
+      amountBB: amountChips / Math.max(1, game.big_blind_chips),
+    } : {}),
+  });
+  const seatedPlayers = players
+    .filter((player) => player.status === 'active')
+    .map((player) => player.seat_index)
+    .sort((a, b) => a - b);
+  const nextGuided = nextGuidedActionState({
+    actions: nextActions,
+    street: state.street,
+    actedSeat: actor.seat_index,
+    seatedPlayers,
+    tableSize: game.table_size,
+    buttonSeat: state.buttonSeat ?? seatedPlayers[0] ?? 0,
+  });
+  const foldedSeatIds = new Set(nextActions.filter((item) => item.action === 'fold').map((item) => item.seatId));
+  const foldedUserIds = players
+    .filter((player) => foldedSeatIds.has(player.seat_index))
+    .map((player) => player.user_id);
+
+  await db.query(
+    `UPDATE async_poker_game_players
+     SET last_seen_at = NOW()
+     WHERE game_id = $1 AND user_id = $2`,
+    [gameId, actorUserId]
+  );
+
+  if (nextGuided.handActionClosed) {
+    const winnerSeats = unfoldedSeats(nextActions, seatedPlayers);
+    const activePlayers = players.filter((player) => winnerSeats.includes(player.seat_index));
+    state = resolveAsyncPokerHand(
+      { ...state, actions: nextActions, foldedUserIds },
+      activePlayers,
+      winnerSeats.length <= 1 ? 'all_but_one_folded' : 'showdown'
+    );
+    const finalPotChips = Math.round(totalPotBB(nextActions) * game.big_blind_chips);
+    if (state.winnerUserIds.length > 0 && finalPotChips > 0) {
+      const share = Math.floor(finalPotChips / state.winnerUserIds.length);
+      const remainder = finalPotChips - (share * state.winnerUserIds.length);
+      for (const [index, winnerUserId] of state.winnerUserIds.entries()) {
+        await db.query(
+          `UPDATE async_poker_game_players
+           SET stack_chips = stack_chips + $3
+           WHERE game_id = $1 AND user_id = $2`,
+          [gameId, winnerUserId, share + (index === 0 ? remainder : 0)]
+        );
+      }
+    }
+    const nextButtonSeat = nextClockwise(state.buttonSeat ?? seatedPlayers[0], seatedPlayers, game.table_size)
+      ?? state.buttonSeat
+      ?? seatedPlayers[0];
+    const dealt = await dealAsyncPokerHand(db, {
+      gameId,
+      game,
+      players: players.filter((player) => player.status === 'active'),
+      buttonSeat: nextButtonSeat,
+      handNumberIncrement: 1,
+    });
+    const previousHandResult = createPreviousAsyncPokerHandResult(state, game.hand_number, finalPotChips);
+    await db.query(
+      `UPDATE async_poker_games
+       SET state = state || jsonb_build_object('previousHandResult', $2::jsonb),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [gameId, previousHandResult]
+    );
+    return dealt.firstPlayerId;
+  }
+
+  if (nextGuided.street !== state.street) {
+    const drawCount = nextGuided.street === 'flop' ? 3 : 1;
+    const drawn = drawAsyncPokerCards(state, drawCount);
+    state = {
+      ...state,
+      street: nextGuided.street,
+      actions: nextActions,
+      deck: drawn.deck,
+      board: [...(state.board ?? []), ...drawn.cards],
+      foldedUserIds,
+    };
+  } else {
+    state = {
+      ...state,
+      actions: nextActions,
+      foldedUserIds,
+    };
+  }
+  const nextPlayer = players.find((player) => player.seat_index === nextGuided.seatId) ?? null;
+
+  await db.query(
+    `UPDATE async_poker_games
+     SET state = $2,
+         current_player_user_id = $3,
+         pot_chips = $5,
+         current_turn_started_at = NOW(),
+         current_turn_expires_at = NOW() + ($4 || ' seconds')::interval,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [gameId, state, nextPlayer?.user_id ?? null, game.turn_seconds, Math.round(totalPotBB(nextActions) * game.big_blind_chips)]
+  );
+  return nextPlayer?.user_id ?? null;
+}
+
+function prepareAsyncPokerQueuedAction({ game, players, state, actor, queuedAction }) {
+  if (!queuedAction || typeof queuedAction !== 'object') return null;
+  if (queuedAction.handNumber !== game.hand_number || queuedAction.street !== state.street) return null;
+  if (!['call', 'raise'].includes(queuedAction.action)) return null;
+  const folded = new Set((state.foldedUserIds ?? []).map(Number));
+  if (folded.has(Number(actor.user_id))) return null;
+
+  const summary = actionSummary(state.actions, state.street, actor.seat_index);
+  const stackChips = Math.max(0, Number(actor.stack_chips ?? 0));
+  const queuedAmount = Number.isInteger(queuedAction.amountChips) ? queuedAction.amountChips : -1;
+  const toCallChips = Math.max(0, Math.round(summary.toCallBB * game.big_blind_chips));
+  const contributionChips = Math.max(0, Math.round(summary.seatContributionBB * game.big_blind_chips));
+  const minRaiseToChips = Math.max(0, Math.round(summary.minRaiseToBB * game.big_blind_chips));
+
+  if (queuedAction.action === 'call') {
+    if (queuedAmount < 0) return null;
+    if (summary.canCheck) return { action: 'check', amountChips: null };
+    if (!summary.canCall || toCallChips <= 0 || toCallChips > stackChips) return null;
+    if (toCallChips > queuedAmount) return null;
+    return { action: 'call', amountChips: toCallChips };
+  }
+  if (queuedAction.action === 'raise') {
+    if (queuedAmount <= 0) return null;
+    if (summary.canBet) {
+      if (queuedAmount > stackChips) return null;
+      return { action: 'bet', amountChips: queuedAmount };
+    }
+    const commitChips = queuedAmount - contributionChips;
+    if (summary.canRaise && queuedAmount >= minRaiseToChips && commitChips > toCallChips && commitChips <= stackChips) {
+      return { action: 'raise', amountChips: commitChips };
+    }
+    if (summary.canCall && toCallChips > 0 && toCallChips <= queuedAmount && toCallChips <= stackChips) {
+      return { action: 'call', amountChips: toCallChips };
+    }
+    return null;
+  }
+  return null;
+}
+
+function asyncPokerQueuedActionNote(queuedAction) {
+  const amount = Number.isInteger(queuedAction.amountChips) ? `${queuedAction.amountChips} chips` : '';
+  const suffix = queuedAction.note ? ` · ${queuedAction.note}` : '';
+  if (queuedAction.action === 'call') return queuedAction.amountChips === 0
+    ? `Pre-decided: check if free${suffix}`
+    : `Pre-decided: call to ${amount}${suffix}`;
+  if (queuedAction.action === 'raise') return `Pre-decided: raise to ${amount}${suffix}`;
+  return `Pre-decided action${suffix}`;
+}
+
+function validateAsyncPokerManualAction({ game, state, actor, action, amountChips }) {
+  const summary = actionSummary(state.actions, state.street, actor.seat_index);
+  const amount = Number.isInteger(amountChips) ? amountChips : null;
+  const contributionChips = Math.max(0, Math.round(summary.seatContributionBB * game.big_blind_chips));
+  const minRaiseToChips = Math.max(0, Math.round(summary.minRaiseToBB * game.big_blind_chips));
+
+  if (action === 'bet') {
+    if (!summary.canBet) return 'Cannot bet after a bet has been made';
+    if (amount === null || amount <= 0) return 'Bet amount must be positive';
+  }
+  if (action === 'raise') {
+    if (!summary.canRaise) return 'Cannot raise without a bet to raise';
+    if (amount === null || amount <= 0) return 'Raise amount must be positive';
+    const targetChips = contributionChips + amount;
+    if (targetChips < minRaiseToChips) {
+      return `Minimum raise is to ${minRaiseToChips} chips`;
+    }
+  }
+  return null;
+}
+
+async function settleAsyncPokerNpcTurns(db, gameId) {
+  let finalPlayerId = null;
+  for (let step = 0; step < 24; step += 1) {
+    const { rows: gameRows } = await db.query(
+        `SELECT g.id, g.status, g.current_player_user_id, g.state, g.hand_number, g.big_blind_chips,
+              COALESCE(current_player.is_npc, false) AS current_player_is_npc
+       FROM async_poker_games g
+       LEFT JOIN users current_player ON current_player.id = g.current_player_user_id
+       WHERE g.id = $1
+       FOR UPDATE OF g`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    finalPlayerId = game?.current_player_user_id ?? null;
+    if (!game || game.status !== 'active' || !game.current_player_user_id) {
+      return finalPlayerId;
+    }
+
+    const { rows: players } = await db.query(
+      `SELECT user_id, seat_index, status, stack_chips
+       FROM async_poker_game_players
+       WHERE game_id = $1
+       ORDER BY seat_index`,
+      [gameId]
+    );
+    const actor = players.find((player) => Number(player.user_id) === Number(game.current_player_user_id));
+    if (!actor) return null;
+
+    const state = normalizeAsyncPokerHandState(game.state);
+    const queuedAction = state.pendingActions?.[String(actor.user_id)] ?? null;
+    let amountChips = null;
+    let action = null;
+    let note = null;
+
+    if (queuedAction) {
+      const stateWithoutPending = withoutPendingAsyncPokerAction(state, actor.user_id);
+      await db.query(
+        `UPDATE async_poker_games
+         SET state = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [gameId, stateWithoutPending]
+      );
+      const prepared = prepareAsyncPokerQueuedAction({ game, players, state, actor, queuedAction });
+      if (!prepared) {
+        return actor.user_id;
+      }
+      action = prepared.action;
+      amountChips = prepared.amountChips;
+      note = asyncPokerQueuedActionNote(queuedAction);
+      await markAsyncPokerTurnNotificationsRead(db, { gameId, userId: actor.user_id });
+    } else if (game.current_player_is_npc) {
+      const summary = actionSummary(state.actions, state.street, actor.seat_index);
+      const callChips = Math.max(0, Math.round(summary.toCallBB * game.big_blind_chips));
+      amountChips = summary.canCall ? Math.min(actor.stack_chips, callChips) : null;
+      action = summary.canCall ? 'call' : 'check';
+      note = 'NPC acted automatically';
+    } else {
+      return finalPlayerId;
+    }
+
+    if (amountChips !== null && amountChips > 0) {
+      await db.query(
+        `UPDATE async_poker_game_players
+         SET stack_chips = GREATEST(stack_chips - $3, 0)
+         WHERE game_id = $1 AND user_id = $2`,
+        [gameId, actor.user_id, amountChips]
+      );
+    }
+    await db.query(
+      `INSERT INTO async_poker_actions (game_id, user_id, hand_number, action, street, amount_chips, note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [gameId, actor.user_id, game.hand_number, action, state.street, amountChips, note]
+    );
+    finalPlayerId = await advanceAsyncPokerTurn(db, gameId, actor.user_id, { name: action, amountChips });
+  }
+  return finalPlayerId;
+}
+
+async function settleVisibleAsyncPokerNpcTurns(db, userId) {
+  const { rows } = await db.query(
+    `SELECT g.id
+     FROM async_poker_games g
+     LEFT JOIN users current_player ON current_player.id = g.current_player_user_id
+     WHERE g.status = 'active'
+       AND g.current_player_user_id IS NOT NULL
+       AND (
+         current_player.is_npc = TRUE
+         OR (COALESCE(g.state->'pendingActions', '{}'::jsonb) ? g.current_player_user_id::text)
+       )
+       AND (
+         g.host_user_id = $1
+         OR EXISTS (
+           SELECT 1 FROM async_poker_game_players mine
+           WHERE mine.game_id = g.id AND mine.user_id = $1
+         )
+       )
+     ORDER BY g.updated_at DESC
+     LIMIT 20`,
+    [userId]
+  );
+  for (const row of rows) {
+    const nextPlayerId = await settleAsyncPokerNpcTurns(db, row.id);
+    if (nextPlayerId) await notifyAsyncPokerTurn(db, row.id, nextPlayerId);
+  }
+}
+
+function serializeAsyncPokerGame(row, viewerUserId) {
+  const hostVisibleNpcUserIds = Number(row.host_user_id) === Number(viewerUserId) && Array.isArray(row.players)
+    ? row.players.filter((player) => player?.isNpc).map((player) => player.userId)
+    : [];
+  return {
+    id: row.id,
+    name: row.name,
+    hostUserId: row.host_user_id,
+    hostUsername: row.host_username,
+    tableSize: row.table_size,
+    turnSeconds: row.turn_seconds,
+    status: row.status,
+    currentPlayerUserId: row.current_player_user_id,
+    currentPlayerUsername: row.current_player_username,
+    currentPlayerIsNpc: Boolean(row.current_player_is_npc),
+    currentTurnStartedAt: row.current_turn_started_at,
+    currentTurnExpiresAt: row.current_turn_expires_at,
+    handNumber: row.hand_number,
+    potChips: row.pot_chips,
+    smallBlindChips: row.small_blind_chips,
+    bigBlindChips: row.big_blind_chips,
+    state: sanitizeAsyncPokerState(row.state, viewerUserId, hostVisibleNpcUserIds),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    isPlayer: Boolean(row.is_player),
+    players: Array.isArray(row.players) ? row.players : [],
+    recentActions: Array.isArray(row.recent_actions) ? row.recent_actions : [],
+  };
+}
+
+async function listAsyncPokerGames(userId) {
+  const { rows } = await pool.query(
+    `SELECT g.*,
+            host.username AS host_username,
+            current_player.username AS current_player_username,
+            current_player.is_npc AS current_player_is_npc,
+            EXISTS (
+              SELECT 1 FROM async_poker_game_players mine
+              WHERE mine.game_id = g.id AND mine.user_id = $1
+            ) AS is_player,
+            COALESCE(
+              jsonb_agg(
+                DISTINCT jsonb_build_object(
+                  'userId', p.user_id,
+                  'username', player.username,
+                  'seatIndex', p.seat_index,
+                  'stackChips', p.stack_chips,
+                  'status', p.status,
+                  'joinedAt', p.joined_at,
+                  'isNpc', COALESCE(player.is_npc, false)
+                )
+              ) FILTER (WHERE p.user_id IS NOT NULL),
+              '[]'::jsonb
+            ) AS players,
+            (
+              SELECT COALESCE(jsonb_agg(row_to_json(action_row) ORDER BY action_row."createdAt" DESC), '[]'::jsonb)
+              FROM (
+                SELECT a.id,
+                       a.user_id AS "userId",
+                       action_user.username,
+                       a.hand_number AS "handNumber",
+                       a.action,
+                       a.street,
+                       a.amount_chips AS "amountChips",
+                       a.note,
+                       a.created_at AS "createdAt"
+                FROM async_poker_actions a
+                JOIN users action_user ON action_user.id = a.user_id
+                WHERE a.game_id = g.id
+                ORDER BY a.created_at DESC
+                LIMIT 80
+              ) action_row
+            ) AS recent_actions
+     FROM async_poker_games g
+     JOIN users host ON host.id = g.host_user_id
+     LEFT JOIN users current_player ON current_player.id = g.current_player_user_id
+     LEFT JOIN async_poker_game_players p ON p.game_id = g.id
+     LEFT JOIN users player ON player.id = p.user_id
+     WHERE g.host_user_id = $1
+        OR EXISTS (
+          SELECT 1 FROM async_poker_game_players mine
+          WHERE mine.game_id = g.id AND mine.user_id = $1
+        )
+     GROUP BY g.id, host.username, current_player.username, current_player.is_npc
+     ORDER BY g.updated_at DESC
+     LIMIT 50`,
+    [userId]
+  );
+  return rows.map((row) => serializeAsyncPokerGame(row, userId));
+}
+
+async function getAsyncPokerGameForUser(gameId, userId) {
+  const games = await listAsyncPokerGames(userId);
+  return games.find((game) => game.id === gameId) ?? null;
+}
+
+async function getNextAsyncPokerSeat(db, gameId, tableSize) {
+  const { rows } = await db.query(
+    'SELECT seat_index FROM async_poker_game_players WHERE game_id = $1 ORDER BY seat_index',
+    [gameId]
+  );
+  const taken = new Set(rows.map((row) => row.seat_index));
+  for (let seat = 0; seat < tableSize; seat += 1) {
+    if (!taken.has(seat)) return seat;
+  }
+  return null;
+}
+
+function normalizeNpcUsernameSeed(value) {
+  const normalized = trimText(value, 24)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return normalized || 'npc';
+}
+
+async function createNpcUser(db, seed) {
+  const base = normalizeNpcUsernameSeed(seed);
+  const hash = await bcrypt.hash(randomUUID(), BCRYPT_ROUNDS);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const suffix = attempt === 0 ? '' : `-${attempt + 1}`;
+    const username = `${base}${suffix}`.slice(0, 30);
+    try {
+      const { rows } = await db.query(
+        `INSERT INTO users (username, email, password_hash, role, membership_tier, is_npc)
+         VALUES ($1, NULL, $2, 'user', $3, TRUE)
+         RETURNING id, username`,
+        [username, hash, DEFAULT_USER_TIER]
+      );
+      return rows[0];
+    } catch (err) {
+      if (err.code !== '23505') throw err;
+    }
+  }
+  throw new Error('Failed to create a unique NPC name');
+}
+
 // ── Bug reports ──────────────────────────────────────────────────────────────
 
 app.post('/api/bug-reports', async (req, res) => {
@@ -1077,6 +2177,945 @@ app.post('/api/account/promo-code', requireDb, requireAuth, async (req, res) => 
     await client.query('ROLLBACK').catch(() => {});
     console.error('[promo] redeem error:', err);
     res.status(err.statusCode ?? 500).json({ error: err.statusCode ? err.message : 'Failed to redeem promo code' });
+  } finally {
+    client.release();
+  }
+});
+
+// ── Notifications + async poker routes ──────────────────────────────────────
+
+app.get('/api/notifications', requireDb, requireAuth, async (req, res) => {
+  try {
+    await clearStaleAsyncPokerTurnNotifications(req.session.userId);
+    await refreshAsyncPokerTurnReminders(req.session.userId);
+    const unreadOnly = req.query?.unread === 'true';
+    const { rows } = await pool.query(
+      `SELECT id, type, title, body, action_path, metadata, read_at, created_at
+       FROM in_app_notifications
+       WHERE user_id = $1
+         AND ($2::boolean = false OR read_at IS NULL)
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [req.session.userId, unreadOnly]
+    );
+    res.json({
+      notifications: rows.map((row) => ({
+        id: row.id,
+        type: row.type,
+        title: row.title,
+        body: row.body,
+        actionPath: row.action_path,
+        metadata: row.metadata ?? {},
+        readAt: row.read_at,
+        createdAt: row.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error('[notifications] list error:', err);
+    res.status(500).json({ error: 'Failed to load notifications' });
+  }
+});
+
+app.patch('/api/notifications/:id', requireDb, requireAuth, async (req, res) => {
+  try {
+    const read = req.body?.read !== false;
+    const { rows } = await pool.query(
+      `UPDATE in_app_notifications
+       SET read_at = CASE WHEN $1 THEN COALESCE(read_at, NOW()) ELSE NULL END
+       WHERE id = $2 AND user_id = $3
+       RETURNING id, read_at`,
+      [read, req.params.id, req.session.userId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Notification not found' });
+    res.json({ notification: { id: rows[0].id, readAt: rows[0].read_at } });
+  } catch (err) {
+    console.error('[notifications] update error:', err);
+    res.status(500).json({ error: 'Failed to update notification' });
+  }
+});
+
+app.get('/api/notification-preferences', requireDb, requireAuth, async (req, res) => {
+  try {
+    const preference = await getNotificationPreference(req.session.userId);
+    res.json({ preference: serializeNotificationPreference(preference) });
+  } catch (err) {
+    console.error('[notifications] preference load error:', err);
+    res.status(500).json({ error: 'Failed to load notification preferences' });
+  }
+});
+
+app.put('/api/notification-preferences', requireDb, requireAuth, async (req, res) => {
+  try {
+    const emailTurnNotifications = Boolean(req.body?.emailTurnNotifications);
+    const discordTurnNotifications = Boolean(req.body?.discordTurnNotifications);
+    const discordUserId = normalizeDiscordUserId(req.body?.discordUserId);
+    if (discordTurnNotifications && !discordUserId) {
+      return res.status(400).json({ error: 'Discord user ID is required to enable Discord turn notifications' });
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO notification_preferences
+         (user_id, email_turn_notifications, discord_turn_notifications, discord_user_id, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         email_turn_notifications = EXCLUDED.email_turn_notifications,
+         discord_turn_notifications = EXCLUDED.discord_turn_notifications,
+         discord_user_id = EXCLUDED.discord_user_id,
+         updated_at = NOW()
+       RETURNING email_turn_notifications, discord_turn_notifications, discord_user_id`,
+      [req.session.userId, emailTurnNotifications, discordTurnNotifications, discordUserId]
+    );
+    res.json({ preference: serializeNotificationPreference(rows[0]) });
+  } catch (err) {
+    console.error('[notifications] preference save error:', err);
+    res.status(500).json({ error: 'Failed to save notification preferences' });
+  }
+});
+
+app.get('/api/async-poker/games', requireDb, requireAuth, async (req, res) => {
+  try {
+    await settleVisibleAsyncPokerNpcTurns(pool, req.session.userId);
+    await clearStaleAsyncPokerTurnNotifications(req.session.userId);
+    await refreshAsyncPokerTurnReminders(req.session.userId);
+    const [games, preferenceResult, notificationsResult] = await Promise.all([
+      listAsyncPokerGames(req.session.userId),
+      getNotificationPreference(req.session.userId),
+      pool.query(
+        `SELECT id, type, title, body, action_path, metadata, read_at, created_at
+         FROM in_app_notifications
+         WHERE user_id = $1
+           AND read_at IS NULL
+         ORDER BY created_at DESC
+         LIMIT 20`,
+        [req.session.userId]
+      ),
+    ]);
+    res.json({
+      games,
+      preference: serializeNotificationPreference(preferenceResult),
+      notifications: notificationsResult.rows.map((row) => ({
+        id: row.id,
+        type: row.type,
+        title: row.title,
+        body: row.body,
+        actionPath: row.action_path,
+        metadata: row.metadata ?? {},
+        readAt: row.read_at,
+        createdAt: row.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error('[async-poker] list error:', err);
+    res.status(500).json({ error: 'Failed to load async poker games' });
+  }
+});
+
+app.post('/api/async-poker/games', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const name = trimText(req.body?.name, 120) || `${req.session.username}'s table`;
+    const tableSize = normalizeTableSize(req.body?.tableSize);
+    const turnSeconds = normalizeTurnSeconds(req.body?.turnSeconds);
+    const inviteUsernames = Array.isArray(req.body?.inviteUsernames)
+      ? req.body.inviteUsernames.map((name) => trimText(name, 30).toLowerCase()).filter(Boolean)
+      : [];
+    const gameId = randomUUID();
+
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO async_poker_games (id, host_user_id, name, table_size, turn_seconds, state)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [gameId, req.session.userId, name, tableSize, turnSeconds, { invitedUsernames: inviteUsernames }]
+    );
+    await client.query(
+      `INSERT INTO async_poker_game_players (game_id, user_id, seat_index, stack_chips)
+       VALUES ($1, $2, 0, $3)`,
+      [gameId, req.session.userId, ASYNC_POKER_DEFAULT_STACK]
+    );
+    await client.query(
+      `INSERT INTO async_poker_actions (game_id, user_id, action, note)
+       VALUES ($1, $2, 'join', 'Hosted the table')`,
+      [gameId, req.session.userId]
+    );
+
+    if (inviteUsernames.length > 0) {
+      const { rows: invitees } = await client.query(
+        `SELECT id, username
+         FROM users
+         WHERE username = ANY($1::text[])
+           AND id <> $2
+         LIMIT 8`,
+        [inviteUsernames, req.session.userId]
+      );
+      for (const invitee of invitees) {
+        await createInAppNotification(client, {
+          userId: invitee.id,
+          type: 'async_poker_invite',
+          title: 'Async poker invite',
+          body: `${req.session.username} invited you to ${name}.`,
+          actionPath: 'poker_async',
+        });
+      }
+    }
+
+    await client.query('COMMIT');
+    const game = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.status(201).json({ game });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] create error:', err);
+    res.status(500).json({ error: 'Failed to create async poker game' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/async-poker/games/:id/join', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const gameId = req.params.id;
+    if (!isValidUuid(gameId)) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    await client.query('BEGIN');
+    const { rows: gameRows } = await client.query(
+      `SELECT id, table_size, status
+       FROM async_poker_games
+       WHERE id = $1
+       FOR UPDATE`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    if (!game) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    const { rows: existingPlayers } = await client.query(
+      `SELECT 1
+       FROM async_poker_game_players
+       WHERE game_id = $1 AND user_id = $2`,
+      [gameId, req.session.userId]
+    );
+    if (existingPlayers.length > 0) {
+      await client.query('COMMIT');
+      const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+      return res.json({ game: updated });
+    }
+    if (game.status !== 'waiting') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Only waiting games can be joined' });
+    }
+    const requestedSeat = req.body?.seatIndex === null || req.body?.seatIndex === undefined
+      ? null
+      : Number.parseInt(String(req.body.seatIndex), 10);
+    if (
+      requestedSeat !== null
+      && (!Number.isInteger(requestedSeat) || requestedSeat < 0 || requestedSeat >= game.table_size)
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Seat is not available' });
+    }
+    const seat = requestedSeat ?? await getNextAsyncPokerSeat(client, gameId, game.table_size);
+    if (seat === null) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This table is full' });
+    }
+    if (requestedSeat !== null) {
+      const { rows: occupiedRows } = await client.query(
+        `SELECT 1
+         FROM async_poker_game_players
+         WHERE game_id = $1 AND seat_index = $2`,
+        [gameId, requestedSeat]
+      );
+      if (occupiedRows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Seat is already occupied' });
+      }
+    }
+    await client.query(
+      `INSERT INTO async_poker_game_players (game_id, user_id, seat_index, stack_chips)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (game_id, user_id) DO NOTHING`,
+      [gameId, req.session.userId, seat, ASYNC_POKER_DEFAULT_STACK]
+    );
+    await client.query(
+      `INSERT INTO async_poker_actions (game_id, user_id, action, note)
+       VALUES ($1, $2, 'join', 'Joined the table')`,
+      [gameId, req.session.userId]
+    );
+    await client.query('COMMIT');
+    const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.json({ game: updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] join error:', err);
+    res.status(500).json({ error: 'Failed to join game' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/async-poker/games/:id/npcs', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const gameId = req.params.id;
+    if (!isValidUuid(gameId)) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    await client.query('BEGIN');
+    const { rows: gameRows } = await client.query(
+      `SELECT id, host_user_id, table_size, status
+       FROM async_poker_games
+       WHERE id = $1
+       FOR UPDATE`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    if (!game) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    if (game.host_user_id !== req.session.userId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only the host can add NPCs' });
+    }
+    if (game.status !== 'waiting') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'NPCs can only be added before the table starts' });
+    }
+
+    const seat = await getNextAsyncPokerSeat(client, gameId, game.table_size);
+    if (seat === null) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This table is full' });
+    }
+    const { rows: countRows } = await client.query(
+      `SELECT COUNT(*)::int AS count
+       FROM async_poker_game_players p
+       JOIN users u ON u.id = p.user_id
+       WHERE p.game_id = $1 AND u.is_npc = TRUE`,
+      [gameId]
+    );
+    const requestedName = trimText(req.body?.name, 24);
+    const npc = await createNpcUser(client, requestedName || `npc-${countRows[0].count + 1}`);
+    await client.query(
+      `INSERT INTO async_poker_game_players (game_id, user_id, seat_index, stack_chips)
+       VALUES ($1, $2, $3, $4)`,
+      [gameId, npc.id, seat, ASYNC_POKER_DEFAULT_STACK]
+    );
+    await client.query(
+      `INSERT INTO async_poker_actions (game_id, user_id, action, note)
+       VALUES ($1, $2, 'join', $3)`,
+      [gameId, req.session.userId, `${npc.username} joined as an NPC`]
+    );
+    await client.query(
+      `UPDATE async_poker_games
+       SET updated_at = NOW()
+       WHERE id = $1`,
+      [gameId]
+    );
+
+    await client.query('COMMIT');
+    const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.json({ game: updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] add npc error:', err);
+    res.status(500).json({ error: 'Failed to add NPC' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/async-poker/games/:id/start', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const gameId = req.params.id;
+    if (!isValidUuid(gameId)) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    await client.query('BEGIN');
+    const { rows: gameRows } = await client.query(
+      `SELECT id, host_user_id, table_size, turn_seconds, status, hand_number, small_blind_chips, big_blind_chips
+       FROM async_poker_games
+       WHERE id = $1
+       FOR UPDATE`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    if (!game) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    if (game.host_user_id !== req.session.userId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only the host can start this game' });
+    }
+    if (game.status !== 'waiting') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This game has already started' });
+    }
+    const { rows: players } = await client.query(
+      `SELECT user_id, seat_index, status
+       FROM async_poker_game_players
+       WHERE game_id = $1 AND status = 'active'
+       ORDER BY seat_index`,
+      [gameId]
+    );
+    if (players.length < 2) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'At least two players are needed to start' });
+    }
+    const buttonSeat = players.find((player) => player.user_id === game.host_user_id)?.seat_index
+      ?? players[0].seat_index;
+    const handState = createAsyncPokerHandState(players, {
+      tableSize: game.table_size,
+      buttonSeat,
+      smallBlindChips: game.small_blind_chips,
+      bigBlindChips: game.big_blind_chips,
+    });
+    const seatedPlayers = players.map((player) => player.seat_index).sort((a, b) => a - b);
+    const firstPlayerSeat = firstPreflopActor({
+      seatedPlayers,
+      tableSize: game.table_size,
+      bigBlindSeat: handState.bigBlindSeat,
+    });
+    const firstPlayerId = players.find((player) => player.seat_index === firstPlayerSeat)?.user_id
+      ?? players[0].user_id;
+    if (handState.smallBlindSeat !== null) {
+      const smallBlindPlayer = players.find((player) => player.seat_index === handState.smallBlindSeat);
+      if (smallBlindPlayer) {
+        await client.query(
+          `UPDATE async_poker_game_players
+           SET stack_chips = GREATEST(stack_chips - $3, 0)
+           WHERE game_id = $1 AND user_id = $2`,
+          [gameId, smallBlindPlayer.user_id, game.small_blind_chips]
+        );
+      }
+    }
+    if (handState.bigBlindSeat !== null) {
+      const bigBlindPlayer = players.find((player) => player.seat_index === handState.bigBlindSeat);
+      if (bigBlindPlayer) {
+        await client.query(
+          `UPDATE async_poker_game_players
+           SET stack_chips = GREATEST(stack_chips - $3, 0)
+           WHERE game_id = $1 AND user_id = $2`,
+          [gameId, bigBlindPlayer.user_id, game.big_blind_chips]
+        );
+      }
+    }
+    const startingPotChips = Math.round(totalPotBB(handState.actions) * game.big_blind_chips);
+    await client.query(
+      `UPDATE async_poker_games
+       SET status = 'active',
+           current_player_user_id = $2,
+           current_turn_started_at = NOW(),
+           current_turn_expires_at = NOW() + ($3 || ' seconds')::interval,
+           state = $4,
+           pot_chips = $5,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [gameId, firstPlayerId, game.turn_seconds, handState, startingPotChips]
+    );
+    await client.query(
+      `INSERT INTO async_poker_actions (game_id, user_id, hand_number, action, note)
+       VALUES ($1, $2, $3, 'start', 'Started the game')`,
+      [gameId, req.session.userId, game.hand_number]
+    );
+    const nextPlayerId = await settleAsyncPokerNpcTurns(client, gameId);
+    await notifyAsyncPokerTurn(client, gameId, nextPlayerId ?? firstPlayerId);
+    await client.query('COMMIT');
+    const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.json({ game: updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] start error:', err);
+    res.status(500).json({ error: 'Failed to start game' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/async-poker/games/:id/end', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const gameId = req.params.id;
+    if (!isValidUuid(gameId)) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+
+    await client.query('BEGIN');
+    const { rows: gameRows } = await client.query(
+      `SELECT id, host_user_id, status, hand_number, state
+       FROM async_poker_games
+       WHERE id = $1
+       FOR UPDATE`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    if (!game) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    if (game.host_user_id !== req.session.userId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only the host can end this table' });
+    }
+
+    if (game.status !== 'finished') {
+      await client.query(
+        `UPDATE async_poker_games
+         SET status = 'finished',
+             current_player_user_id = NULL,
+             current_turn_started_at = NULL,
+             current_turn_expires_at = NULL,
+             state = COALESCE(state, '{}'::jsonb) || jsonb_build_object(
+               'resolutionReason', 'host_ended',
+               'endedByUserId', $2::integer,
+               'endedAt', NOW()
+             ),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [gameId, req.session.userId]
+      );
+      await client.query(
+        `INSERT INTO async_poker_actions (game_id, user_id, hand_number, action, note)
+         VALUES ($1, $2, $3, 'end', 'Host ended the table')`,
+        [gameId, req.session.userId, game.hand_number]
+      );
+    }
+
+    await client.query(
+      `UPDATE in_app_notifications
+       SET read_at = COALESCE(read_at, NOW())
+       WHERE read_at IS NULL
+         AND type IN ('async_poker_turn', 'async_poker_turn_reminder')
+         AND metadata->>'asyncPokerGameId' = $1`,
+      [gameId]
+    );
+
+    await client.query('COMMIT');
+    const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.json({ game: updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] end error:', err);
+    res.status(500).json({ error: 'Failed to end table' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/async-poker/games/:id/show-cards', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const gameId = req.params.id;
+    if (!isValidUuid(gameId)) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+
+    await client.query('BEGIN');
+    const { rows: gameRows } = await client.query(
+      `SELECT id, status, hand_number, state
+       FROM async_poker_games
+       WHERE id = $1
+       FOR UPDATE`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    if (!game) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    if (game.status !== 'active') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This table is not active' });
+    }
+    const { rows: playerRows } = await client.query(
+      `SELECT 1
+       FROM async_poker_game_players
+       WHERE game_id = $1 AND user_id = $2 AND status = 'active'`,
+      [gameId, req.session.userId]
+    );
+    if (playerRows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only seated players can show cards' });
+    }
+
+    const state = normalizeAsyncPokerHandState(game.state);
+    if (!state.resolvedAt) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Cards can be shown after the hand resolves' });
+    }
+    const shownUserIds = [...new Set([...(state.shownUserIds ?? []), req.session.userId].map(Number))];
+    await client.query(
+      `UPDATE async_poker_games
+       SET state = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [gameId, { ...state, shownUserIds }]
+    );
+    await client.query(
+      `INSERT INTO async_poker_actions (game_id, user_id, hand_number, action, note)
+       VALUES ($1, $2, $3, 'show', 'Showed hole cards')`,
+      [gameId, req.session.userId, game.hand_number]
+    );
+    await client.query('COMMIT');
+    const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.json({ game: updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] show cards error:', err);
+    res.status(500).json({ error: 'Failed to show cards' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/async-poker/games/:id/acknowledge-result', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const gameId = req.params.id;
+    if (!isValidUuid(gameId)) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+
+    await client.query('BEGIN');
+    const { rows: gameRows } = await client.query(
+      `SELECT id, status, state
+       FROM async_poker_games
+       WHERE id = $1
+       FOR UPDATE`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    if (!game) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    if (game.status !== 'active') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This table is not active' });
+    }
+
+    const { rows: players } = await client.query(
+      `SELECT user_id
+       FROM async_poker_game_players
+       WHERE game_id = $1 AND status = 'active'
+       ORDER BY seat_index`,
+      [gameId]
+    );
+    if (!players.some((player) => player.user_id === req.session.userId)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only seated players can acknowledge results' });
+    }
+
+    const state = normalizeAsyncPokerHandState(game.state);
+    if (!state.previousHandResult) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'No previous hand result to acknowledge' });
+    }
+
+    const previousHandResult = {
+      ...state.previousHandResult,
+      acknowledgedUserIds: [
+        ...new Set([...(state.previousHandResult.acknowledgedUserIds ?? []), req.session.userId].map(Number)),
+      ],
+    };
+    await client.query(
+      `UPDATE async_poker_games
+       SET state = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [gameId, { ...state, previousHandResult }]
+    );
+    await client.query('COMMIT');
+    const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.json({ game: updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] acknowledge result error:', err);
+    res.status(500).json({ error: 'Failed to acknowledge result' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/async-poker/games/:id/queued-action', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const gameId = req.params.id;
+    if (!isValidUuid(gameId)) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    const action = typeof req.body?.action === 'string' ? req.body.action : '';
+    const amountRaw = req.body?.amountChips;
+    const amountChips = amountRaw === null || amountRaw === undefined || amountRaw === ''
+      ? null
+      : Number.parseInt(String(amountRaw), 10);
+    const note = trimText(req.body?.note, 500) || null;
+    const actorUserIdRaw = req.body?.actorUserId;
+    const requestedActorUserId = actorUserIdRaw === null || actorUserIdRaw === undefined || actorUserIdRaw === ''
+      ? req.session.userId
+      : Number.parseInt(String(actorUserIdRaw), 10);
+
+    if (!['call', 'raise'].includes(action)) {
+      return res.status(400).json({ error: 'Pre-decision must be call to an amount or raise to an amount' });
+    }
+    if (amountChips === null || !Number.isInteger(amountChips)) {
+      return res.status(400).json({ error: 'Add a chip amount for this pre-decision' });
+    }
+    if (action === 'call' && amountChips < 0) {
+      return res.status(400).json({ error: 'Call amount cannot be negative' });
+    }
+    if (action === 'raise' && amountChips <= 0) {
+      return res.status(400).json({ error: 'Raise amount must be positive' });
+    }
+    if (!Number.isInteger(requestedActorUserId)) {
+      return res.status(400).json({ error: 'Invalid player for pre-decision' });
+    }
+
+    await client.query('BEGIN');
+    const { rows: gameRows } = await client.query(
+      `SELECT id, host_user_id, status, current_player_user_id, hand_number, state
+       FROM async_poker_games
+       WHERE id = $1
+       FOR UPDATE`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    if (!game) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    if (game.status !== 'active') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This table is not active' });
+    }
+    if (Number(game.current_player_user_id) === Number(requestedActorUserId)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'It is your turn now. Use the action buttons instead.' });
+    }
+
+    const { rows: playerRows } = await client.query(
+      `SELECT p.status, COALESCE(u.is_npc, false) AS is_npc
+       FROM async_poker_game_players p
+       JOIN users u ON u.id = p.user_id
+       WHERE p.game_id = $1 AND p.user_id = $2`,
+      [gameId, requestedActorUserId]
+    );
+    const player = playerRows[0];
+    if (!player || player.status !== 'active') {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'You are not active in this hand' });
+    }
+    const controllingNpc = Number(requestedActorUserId) !== Number(req.session.userId);
+    if (controllingNpc && (Number(game.host_user_id) !== Number(req.session.userId) || !player.is_npc)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'You can only pre-decide for NPCs you host' });
+    }
+
+    const state = normalizeAsyncPokerHandState(game.state);
+    const folded = new Set((state.foldedUserIds ?? []).map(Number));
+    if (folded.has(Number(requestedActorUserId)) || state.street === 'showdown' || state.resolvedAt) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'You cannot pre-decide for this hand' });
+    }
+    const pendingActions = {
+      ...(state.pendingActions ?? {}),
+      [String(requestedActorUserId)]: {
+        action,
+        amountChips,
+        handNumber: game.hand_number,
+        street: state.street,
+        note,
+        createdAt: new Date().toISOString(),
+      },
+    };
+
+    await client.query(
+      `UPDATE async_poker_games
+       SET state = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [gameId, { ...state, pendingActions }]
+    );
+    await client.query('COMMIT');
+    const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.json({ game: updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] queued action error:', err);
+    res.status(500).json({ error: 'Failed to save pre-decision' });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/async-poker/games/:id/queued-action', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const gameId = req.params.id;
+    if (!isValidUuid(gameId)) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    const actorUserIdRaw = req.query?.actorUserId;
+    const requestedActorUserId = actorUserIdRaw === null || actorUserIdRaw === undefined || actorUserIdRaw === ''
+      ? req.session.userId
+      : Number.parseInt(String(actorUserIdRaw), 10);
+    if (!Number.isInteger(requestedActorUserId)) {
+      return res.status(400).json({ error: 'Invalid player for pre-decision' });
+    }
+    await client.query('BEGIN');
+    const { rows: gameRows } = await client.query(
+      `SELECT id, host_user_id, state
+       FROM async_poker_games
+       WHERE id = $1
+       FOR UPDATE`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    if (!game) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    if (Number(requestedActorUserId) !== Number(req.session.userId)) {
+      const { rows: playerRows } = await client.query(
+        `SELECT COALESCE(u.is_npc, false) AS is_npc
+         FROM async_poker_game_players p
+         JOIN users u ON u.id = p.user_id
+         WHERE p.game_id = $1 AND p.user_id = $2`,
+        [gameId, requestedActorUserId]
+      );
+      if (Number(game.host_user_id) !== Number(req.session.userId) || !playerRows[0]?.is_npc) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ error: 'You can only clear NPC pre-decisions you host' });
+      }
+    }
+    const state = withoutPendingAsyncPokerAction(normalizeAsyncPokerHandState(game.state), requestedActorUserId);
+    await client.query(
+      `UPDATE async_poker_games
+       SET state = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [gameId, state]
+    );
+    await client.query('COMMIT');
+    const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.json({ game: updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] clear queued action error:', err);
+    res.status(500).json({ error: 'Failed to clear pre-decision' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/async-poker/games/:id/actions', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const gameId = req.params.id;
+    if (!isValidUuid(gameId)) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    const action = typeof req.body?.action === 'string' ? req.body.action : '';
+    const amountRaw = req.body?.amountChips;
+    const amountChips = amountRaw === null || amountRaw === undefined || amountRaw === ''
+      ? null
+      : Number.parseInt(String(amountRaw), 10);
+    const note = trimText(req.body?.note, 500) || null;
+
+    if (!ASYNC_POKER_ACTIONS.has(action)) {
+      return res.status(400).json({ error: 'Action must be check, call, bet, raise, fold, or pass' });
+    }
+    if (amountChips !== null && (!Number.isInteger(amountChips) || amountChips < 0)) {
+      return res.status(400).json({ error: 'Amount must be a positive chip count' });
+    }
+
+    await client.query('BEGIN');
+    const { rows: gameRows } = await client.query(
+      `SELECT g.id, g.host_user_id, g.status, g.current_player_user_id, g.current_turn_started_at, g.hand_number, g.state,
+              g.big_blind_chips,
+              COALESCE(current_player.is_npc, false) AS current_player_is_npc
+       FROM async_poker_games g
+       LEFT JOIN users current_player ON current_player.id = g.current_player_user_id
+       WHERE g.id = $1
+       FOR UPDATE OF g`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    if (!game) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    if (game.status !== 'active') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This game is not active' });
+    }
+    const actingForNpc = Boolean(game.current_player_is_npc && game.host_user_id === req.session.userId);
+    if (game.current_player_user_id !== req.session.userId && !actingForNpc) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'It is not your turn' });
+    }
+    const actorUserId = actingForNpc ? game.current_player_user_id : req.session.userId;
+
+    const currentState = normalizeAsyncPokerHandState(game.state);
+    const { rows: actorRows } = await client.query(
+      `SELECT user_id, seat_index, stack_chips
+       FROM async_poker_game_players
+       WHERE game_id = $1 AND user_id = $2`,
+      [gameId, actorUserId]
+    );
+    const actor = actorRows[0];
+    if (!actor) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Actor is not seated' });
+    }
+    const actionError = validateAsyncPokerManualAction({
+      game,
+      state: currentState,
+      actor,
+      action,
+      amountChips,
+    });
+    if (actionError) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: actionError });
+    }
+    if (amountChips !== null && amountChips > 0) {
+      await client.query(
+        `UPDATE async_poker_game_players
+         SET stack_chips = GREATEST(stack_chips - $3, 0)
+         WHERE game_id = $1 AND user_id = $2`,
+        [gameId, actorUserId, amountChips]
+      );
+    }
+    await client.query(
+      `INSERT INTO async_poker_actions (game_id, user_id, hand_number, action, street, amount_chips, note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [gameId, actorUserId, game.hand_number, action, currentState.street, amountChips, note]
+    );
+    if (!actingForNpc) {
+      await markAsyncPokerTurnNotificationsRead(client, {
+        gameId,
+        userId: req.session.userId,
+        turnStartedAt: game.current_turn_started_at ? new Date(game.current_turn_started_at).toISOString() : null,
+      });
+    }
+    const nextPlayerId = await advanceAsyncPokerTurn(client, gameId, actorUserId, { name: action, amountChips });
+    const settledPlayerId = await settleAsyncPokerNpcTurns(client, gameId);
+    const notifyPlayerId = settledPlayerId ?? nextPlayerId;
+    if (notifyPlayerId) {
+      await notifyAsyncPokerTurn(client, gameId, notifyPlayerId);
+    }
+    await client.query('COMMIT');
+    const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.json({ game: updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] action error:', err);
+    res.status(500).json({ error: 'Failed to record poker action' });
   } finally {
     client.release();
   }

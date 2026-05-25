@@ -85,6 +85,11 @@ export function SeatChip({
       </span>
       {stack && (
         <span className="live-seat-stack" title={`${formatLiveNumber(stack.startingStack)} / ${formatLiveNumber(stack.startingStackBB)}BB`}>
+          <span className="live-seat-stack-icon" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
           {formatLiveNumber(stack.startingStackBB)}BB
         </span>
       )}

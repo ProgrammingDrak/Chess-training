@@ -20,6 +20,7 @@ import type {
 } from '../../../types/liveSession';
 import type { Card } from '../../../types/poker';
 import type { PlayerProfile } from '../../../types/profiles';
+import type { VisionBoardCards } from '../../../types/vision';
 import { DEFAULT_ACTION_CONTEXT } from '../../../types/profiles';
 import { occupiedSeatsAt, advanceButton, derivePositions } from '../../../utils/livePoker';
 import { getLiveHandRecommendation } from '../../../utils/pokerHandRecommendation';
@@ -31,8 +32,10 @@ import { LiveHandAdvisor } from './LiveHandAdvisor';
 import { SeatPlayerPicker } from './SeatPlayerPicker';
 import { CardPicker } from '../CardPicker';
 import { HandRangeMatrix } from '../HandRangeMatrix';
-import { PlayingCard } from '../HandDisplay';
 import { ProfileRangeChart } from '../profiles/ProfileRangeChart';
+import { VisionCapturePanel } from './VisionCapturePanel';
+import { LiveActionBar, type LiveActionOdds } from './LiveActionBar';
+import { LiveTableCenter } from './LiveTableCenter';
 import {
   activeBlindLevelForHand as getActiveBlindLevelForHand,
   bankrollNet,
@@ -91,6 +94,12 @@ interface PendingWinner {
 }
 
 const EMPTY_BOARD: BoardCards = [null, null, null, null, null];
+const STREET_ORDER: Record<LiveStreet, number> = {
+  preflop: 0,
+  flop: 1,
+  turn: 2,
+  river: 3,
+};
 const BOARD_SELECTION_LABELS: Record<BoardSelection, string> = {
   flop: 'Flop',
   turn: 'Turn',
@@ -159,10 +168,6 @@ function buildBoard(cards: BoardCards): LiveHand['board'] | undefined {
 
 function formatNumber(value: number): string {
   return formatLiveNumber(value);
-}
-
-function formatPercent(value: number): string {
-  return `${formatNumber(value)}%`;
 }
 
 function formatOddsRatio(rewardBB: number, riskBB: number): string {
@@ -236,6 +241,7 @@ export function LiveSessionActive({
   const [boardSlotCards, setBoardSlotCards] = useState<Card[]>([]);
   const [heroCards, setHeroCards] = useState<Card[]>([]);
   const [heroCardPromptOpen, setHeroCardPromptOpen] = useState(true);
+  const [visionResetSignal, setVisionResetSignal] = useState(0);
   const [showLiveAdviceChart, setShowLiveAdviceChart] = useState(false);
   const [editingWinnerHandIndex, setEditingWinnerHandIndex] = useState<number | null>(null);
   const [editingWinnerCards, setEditingWinnerCards] = useState<Card[]>([]);
@@ -642,6 +648,7 @@ export function LiveSessionActive({
     setHandActions([]);
     setActionSeatId(null);
     setBetSheetOpen(false);
+    setVisionResetSignal(value => value + 1);
   };
 
   const handleAdvisorSnapshotChange = useCallback((snapshot: LiveHandDecisionSnapshot | null) => {
@@ -1086,6 +1093,15 @@ export function LiveSessionActive({
     setBoardSlotCards([]);
   };
 
+  const handleVisionBoardApply = (nextBoard: VisionBoardCards, detectedStreet: LiveStreet) => {
+    setBoardCards([...nextBoard] as BoardCards);
+    setBoardSelection(null);
+    setBoardSlotCards([]);
+    setCurrentStreet(current => (
+      STREET_ORDER[detectedStreet] > STREET_ORDER[current] ? detectedStreet : current
+    ));
+  };
+
   const handleBoardSlotCardsChange = (cards: Card[]) => {
     setBoardSlotCards(cards);
     if (boardSelection !== null && cards.length === requiredBoardCardCount(boardSelection)) {
@@ -1246,7 +1262,6 @@ export function LiveSessionActive({
   }
 
   const currentPotBB = totalPotBB(currentHandActions);
-  const currentPotAmount = currentPotBB * currentBlindLevel.bigBlind;
   const currentStreetBets = useMemo(() => {
     const bets = new Map<SeatId, number>();
     for (const action of currentHandActions) {
@@ -1257,47 +1272,25 @@ export function LiveSessionActive({
   }, [currentHandActions, currentStreet]);
 
   const centerContent = (
-    <div className="live-table-center-stack">
-      <div className="live-table-pot" aria-label="Current pot">
-        <span className="live-table-pot-label">Pot</span>
-        <strong>{formatNumber(currentPotBB)}BB</strong>
-        <span className="live-table-pot-amount">
-          {currentBlindLevel.currency ?? '$'}{formatNumber(currentPotAmount)}
-        </span>
-      </div>
-      <div className="live-board">
-        <div className="live-board-group live-board-flop" aria-label="Flop">
-          {[0, 1, 2].map(index => (
-            <button key={index} type="button" className={`live-board-slot ${boardCards[index] ? 'filled' : ''}`} onClick={() => !isEnded && openBoardSelection('flop')} disabled={isEnded} aria-label="Flop">
-              {boardCards[index] ? <PlayingCard card={boardCards[index]} size="sm" /> : <span>{index + 1}</span>}
-            </button>
-          ))}
-        </div>
-        {(['turn', 'river'] as BoardSelection[]).map(selection => {
-          const index = selection === 'turn' ? 3 : 4;
-          return (
-            <div key={selection} className="live-board-group" aria-label={BOARD_SELECTION_LABELS[selection]}>
-              <button type="button" className={`live-board-slot ${boardCards[index] ? 'filled' : ''}`} onClick={() => !isEnded && openBoardSelection(selection)} disabled={isEnded} aria-label={BOARD_SELECTION_LABELS[selection]}>
-                {boardCards[index] ? <PlayingCard card={boardCards[index]} size="sm" /> : <span>{selection === 'turn' ? 'T' : 'R'}</span>}
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      <div className="live-table-center-text">
-        {isEnded ? <>Session ended<br /><span className="live-table-center-sub">Read-only</span></>
-          : isPaused ? <>Timer paused<br /><span className="live-table-center-sub">Tap Resume when play starts</span></>
-          : mode === 'remove-player' ? 'Tap a seated player to remove'
-          : occupiedNow.length < 2 ? 'Need at least 2 seated players'
-          : <>Hand {nextHandIndex + 1}<br /><span className="live-table-center-sub">Tap a player for outcome</span></>}
-      </div>
-    </div>
+    <LiveTableCenter
+      potBB={currentPotBB}
+      bigBlind={currentBlindLevel.bigBlind}
+      currency={currentBlindLevel.currency ?? '$'}
+      boardCards={boardCards}
+      boardDisabled={isEnded}
+      onBoardSelect={(selection) => !isEnded && openBoardSelection(selection)}
+      status={isEnded ? <>Session ended<br /><span className="live-table-center-sub">Read-only</span></>
+        : isPaused ? <>Timer paused<br /><span className="live-table-center-sub">Tap Resume when play starts</span></>
+        : mode === 'remove-player' ? 'Tap a seated player to remove'
+        : occupiedNow.length < 2 ? 'Need at least 2 seated players'
+        : <>Hand {nextHandIndex + 1}<br /><span className="live-table-center-sub">Tap a player for outcome</span></>}
+    />
   );
 
   const actionActorName = effectiveActionSeatId === null ? 'Action closed' : playerNames[effectiveActionSeatId] ?? `Seat ${effectiveActionSeatId + 1}`;
   const hasUserActions = currentHandActions.some(action => action.action !== 'post-blind' && action.action !== 'post-straddle');
   const actionBarDisabled = isEnded || isPaused || effectiveActionSeatId === null || !activeActionSummary;
-  const actionOdds = activeActionSummary && effectiveActionSeatId !== null ? (() => {
+  const actionOdds: LiveActionOdds | null = activeActionSummary && effectiveActionSeatId !== null ? (() => {
     const callBB = activeActionSummary.toCallBB;
     const potBB = activeActionSummary.potBB;
     const actorRemainingBB = remainingStackBBForSeat(effectiveActionSeatId)
@@ -1338,71 +1331,19 @@ export function LiveSessionActive({
     };
   })() : null;
   const actionBar = !isEnded && (
-    <section className="live-sticky-action-bar" aria-label="Live action controls">
-      <div className="live-sticky-action-main">
-        <div>
-          <div className="live-card-modal-kicker">{currentStreet}</div>
-          <h3>{actionActorName}</h3>
-        </div>
-        <div className="live-action-panel-meta">
-          {actionOdds && (
-            <button type="button" className="live-action-odds-chip" aria-label={`Pot odds ${actionOdds.callBB > 0 ? actionOdds.potOddsRatio : 'free check'}`}>
-              <span className="live-action-odds-label">Pot odds</span>
-              <strong>{actionOdds.callBB > 0 ? actionOdds.potOddsRatio : 'Free'}</strong>
-              <span className="live-action-odds-tooltip" role="tooltip">
-                <span className="live-action-odds-title">Pot odds</span>
-                {actionOdds.callBB > 0 ? (
-                  <>
-                    <span>Current price = {formatNumber(actionOdds.potBB)}BB pot : {formatNumber(actionOdds.callBB)}BB call = {actionOdds.potOddsRatio}.</span>
-                    <span>Required equity = {formatNumber(actionOdds.callBB)} / ({formatNumber(actionOdds.potBB)} + {formatNumber(actionOdds.callBB)}) = {formatPercent(actionOdds.potRequiredEquityPct)}</span>
-                  </>
-                ) : (
-                  <span>No call required. Checking is free.</span>
-                )}
-                <span className="live-action-odds-divider" />
-                <span>{actionOdds.stackLabel}</span>
-              </span>
-            </button>
-          )}
-          {actionOdds && (
-            <button type="button" className="live-action-odds-chip" aria-label={`Implied odds ${actionOdds.callBB > 0 ? actionOdds.impliedOddsRatio : 'not available'}`}>
-              <span className="live-action-odds-label">Implied odds</span>
-              <strong>{actionOdds.callBB > 0 ? actionOdds.impliedOddsRatio : 'N/A'}</strong>
-              <span className="live-action-odds-tooltip" role="tooltip">
-                <span className="live-action-odds-title">Max implied odds</span>
-                {actionOdds.callBB > 0 ? (
-                  <>
-                    <span>Max future win = min({formatNumber(actionOdds.actorRemainingAfterCallBB)}BB after call, {formatNumber(actionOdds.biggestOpponentRemainingBB)}BB deepest opponent) = {formatNumber(actionOdds.impliedFutureBB)}BB.</span>
-                    <span>Max implied price = ({formatNumber(actionOdds.potBB)}BB pot + {formatNumber(actionOdds.impliedFutureBB)}BB future) : {formatNumber(actionOdds.callBB)}BB call = {actionOdds.impliedOddsRatio}.</span>
-                    <span>Required equity at that max = {formatNumber(actionOdds.callBB)} / ({formatNumber(actionOdds.potBB)} + {formatNumber(actionOdds.callBB)} + {formatNumber(actionOdds.impliedFutureBB)}) = {formatPercent(actionOdds.impliedRequiredEquityPct)}</span>
-                  </>
-                ) : (
-                  <span>No call is at risk yet, so implied odds do not apply.</span>
-                )}
-                <span className="live-action-odds-divider" />
-                <span>Pot {formatNumber(actionOdds.potBB)}BB · To call {formatNumber(actionOdds.callBB)}BB · {actionOdds.stackLabel}</span>
-              </span>
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="live-sticky-action-buttons">
-        <button type="button" className="hl-po-chip" onClick={() => effectiveActionSeatId !== null && recordAction(effectiveActionSeatId, 'fold')} disabled={actionBarDisabled}>Fold</button>
-        <button
-          type="button"
-          className="hl-po-chip"
-          onClick={() => effectiveActionSeatId !== null && activeActionSummary && recordAction(effectiveActionSeatId, activeActionSummary.canCheck ? 'check' : 'call')}
-          disabled={actionBarDisabled || (!activeActionSummary?.canCheck && !activeActionSummary?.canCall)}
-        >
-          {activeActionSummary?.canCheck ? 'Check' : `Call ${formatNumber(activeActionSummary?.toCallBB ?? 0)}BB`}
-        </button>
-        <button type="button" className="hl-po-chip" onClick={openActionSizingSheet} disabled={actionBarDisabled}>
-          {activeActionSummary?.canBet ? 'Bet' : 'Raise'}
-        </button>
-        <button type="button" className="hl-po-chip" onClick={() => effectiveActionSeatId !== null && openOutcomeForSeat(effectiveActionSeatId)} disabled={effectiveActionSeatId === null}>Winner</button>
-        <button type="button" className="hl-po-chip" onClick={undoAction} disabled={!hasUserActions}>Undo</button>
-      </div>
-    </section>
+    <LiveActionBar
+      street={currentStreet}
+      actorName={actionActorName}
+      actionSummary={activeActionSummary}
+      actionOdds={actionOdds}
+      disabled={actionBarDisabled}
+      hasUserActions={hasUserActions}
+      onFold={() => effectiveActionSeatId !== null && recordAction(effectiveActionSeatId, 'fold')}
+      onCheckOrCall={() => effectiveActionSeatId !== null && activeActionSummary && recordAction(effectiveActionSeatId, activeActionSummary.canCheck ? 'check' : 'call')}
+      onBetOrRaise={openActionSizingSheet}
+      onWinner={() => effectiveActionSeatId !== null && openOutcomeForSeat(effectiveActionSeatId)}
+      onUndo={undoAction}
+    />
   );
   const pausedTimerWarning = isPaused && !isEnded ? (
     <div className="live-paused-warning" role="alert">
@@ -1482,6 +1423,7 @@ export function LiveSessionActive({
         positions={positions}
         stackInfo={currentStackBySeat}
         streetBets={currentStreetBets}
+        potAmountBB={currentPotBB}
         centerContent={centerContent}
         isSeatDisabled={(seatId) => isEnded || !occupiedNow.includes(seatId)}
         onSeatTap={handleSeatTap}
@@ -1504,6 +1446,16 @@ export function LiveSessionActive({
           onRequestCards={() => setHeroCardPromptOpen(true)}
           onRequestAdvice={() => setShowLiveAdviceChart(value => !value)}
           onSnapshotChange={handleAdvisorSnapshotChange}
+        />
+      )}
+      {!isEnded && (
+        <VisionCapturePanel
+          currentHeroCards={heroCards}
+          currentBoard={boardCards as VisionBoardCards}
+          resetSignal={visionResetSignal}
+          disabled={pendingWinner !== null || outcomeSeatId !== null}
+          onApplyHeroCards={handleHeroCardsChange}
+          onApplyBoard={handleVisionBoardApply}
         />
       )}
       {!isEnded && rangeCandidateSeats.length > 0 && (

@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "dev:server": "node --env-file=.env server.js",
+    "dev:server:local": "node --env-file=.env.local server.js",
+    "db:local:start": "powershell -ExecutionPolicy Bypass -File ./scripts/start-local-postgres.ps1",
+    "db:local:refresh": "powershell -ExecutionPolicy Bypass -File ./scripts/refresh-local-db.ps1",
     "build": "tsc && vite build",
     "start": "node server.js",
     "test": "vitest run",

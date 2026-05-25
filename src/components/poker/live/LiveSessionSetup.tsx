@@ -282,157 +282,21 @@ export function LiveSessionSetup({
         <h1 className="live-setup-title">Start a new session</h1>
       </div>
 
-      <div className="live-setup-controls">
-        <label className="live-setup-field">
-          <span className="live-setup-label">Session name (optional)</span>
-          <input
-            className="live-setup-input"
-            type="text"
-            placeholder="e.g. Saturday $2/$5 home game"
-            value={name}
-            onChange={e => setName(e.target.value)}
-          />
-        </label>
-
-        <label className="live-setup-field">
-          <span className="live-setup-label">Venue / host (optional)</span>
-          <input
-            className="live-setup-input"
-            type="text"
-            placeholder="e.g. Chris's house, Harrah's Cherokee"
-            value={venue}
-            onChange={e => setVenue(e.target.value)}
-          />
-        </label>
-
-        <label className="live-setup-field">
-          <span className="live-setup-label">Address (optional)</span>
-          <input
-            className="live-setup-input"
-            type="text"
-            placeholder="Address or location note"
-            value={address}
-            onChange={e => setAddress(e.target.value)}
-          />
-        </label>
-
-        <label className="live-setup-field">
-          <span className="live-setup-label">Group tag (optional)</span>
-          <input
-            className="live-setup-input"
-            type="text"
-            placeholder="e.g. home-game, casino, tournament"
-            value={groupTag}
-            onChange={e => setGroupTag(e.target.value)}
-          />
-        </label>
-
-        <div className="live-setup-field">
-          <span className="live-setup-label">Starting blinds</span>
-          <div className="live-setup-blinds-row">
-            <input
-              className="live-setup-input live-setup-blind-input"
-              type="text"
-              value={currency}
-              placeholder="$"
-              title="Symbol shown before money amounts, like $ or €"
-              onChange={e => setCurrency(e.target.value)}
-              aria-label="Money symbol"
-            />
-            <input
-              className="live-setup-input live-setup-blind-input"
-              type="number"
-              min={0}
-              step={0.5}
-              value={smallBlindRaw}
-              onChange={e => setSmallBlindRaw(e.target.value)}
-              aria-label="Small blind"
-            />
-            <span className="live-setup-blind-separator">/</span>
-            <input
-              className="live-setup-input live-setup-blind-input"
-              type="number"
-              min={0.01}
-              step={0.5}
-              value={bigBlindRaw}
-              onChange={e => setBigBlindRaw(e.target.value)}
-              aria-label="Big blind"
-            />
-          </div>
-        </div>
-
-        <div className="live-setup-field">
-          <span className="live-setup-label">Default starting stack (BB)</span>
-          <div className="live-setup-blinds-row">
-            <input
-              className="live-setup-input live-setup-blind-input"
-              type="number"
-              min={0}
-              step={1}
-              value={defaultStackRaw}
-              onChange={e => setDefaultStackRaw(e.target.value)}
-              aria-label="Default starting stack in big blinds"
-            />
+      <div className="live-setup-field live-setup-table-first">
+        <span className="live-setup-label">Table size</span>
+        <div className="live-setup-tablesize">
+          {TABLE_SIZE_OPTIONS.map(n => (
             <button
+              key={n}
               type="button"
-              className="btn-secondary"
-              onClick={() => setStackRawBySeat(Object.fromEntries(occupiedSeats.map(seatId => [String(seatId), defaultStackRaw])))}
+              className={`live-setup-tablesize-btn ${tableSize === n ? 'active' : ''}`}
+              onClick={() => handleTableSizeChange(n)}
             >
-              Apply to all
+              {n}
             </button>
-          </div>
-        </div>
-
-        <label className="live-setup-field">
-          <span className="live-setup-label">Notes (optional)</span>
-          <input
-            className="live-setup-input"
-            type="text"
-            placeholder="Game details, tournament notes, table rules..."
-            value={notes}
-            onChange={e => setNotes(e.target.value)}
-          />
-        </label>
-
-        <div className="live-setup-field">
-          <span className="live-setup-label">Table size</span>
-          <div className="live-setup-tablesize">
-            {TABLE_SIZE_OPTIONS.map(n => (
-              <button
-                key={n}
-                type="button"
-                className={`live-setup-tablesize-btn ${tableSize === n ? 'active' : ''}`}
-                onClick={() => handleTableSizeChange(n)}
-              >
-                {n}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <p className="live-setup-helper">
-        Tap an empty seat to add a player.  Tap a filled seat to remove it.  Once you have at
-        least 2 players seated, choose the dealer button and start the session.
-      </p>
-
-      {occupiedSeats.length > 0 && (
-        <div className="live-setup-stack-list">
-          {occupiedSeats.map(seatId => (
-            <label key={seatId} className="hl-sit-field">
-              <span className="hl-label">{playerNames[seatId] ?? `Seat ${seatId + 1}`} stack (BB)</span>
-              <input
-                type="number"
-                min={0}
-                step={1}
-                className="hl-num-input"
-                value={stackRawBySeat[String(seatId)] ?? defaultStackRaw}
-                onChange={e => setStackRawBySeat(prev => ({ ...prev, [String(seatId)]: e.target.value }))}
-              />
-            </label>
           ))}
         </div>
-      )}
+      </div>
 
       <PokerTable
         tableSize={tableSize}
@@ -453,7 +317,7 @@ export function LiveSessionSetup({
         onSeatTap={onSeatTap}
       />
 
-      <div className="live-setup-actions">
+      <div className="live-setup-actions live-setup-primary-actions">
         <button
           type="button"
           className="btn-secondary"
@@ -471,6 +335,145 @@ export function LiveSessionSetup({
           Start session
         </button>
       </div>
+
+      <p className="live-setup-helper live-setup-inline-helper">
+        Tap an empty seat to add a player. Tap a filled seat to remove it. Choose the dealer button, then start.
+      </p>
+
+      <details className="live-setup-optional">
+        <summary>Optional session details</summary>
+
+        <div className="live-setup-controls">
+          <label className="live-setup-field">
+            <span className="live-setup-label">Session name</span>
+            <input
+              className="live-setup-input"
+              type="text"
+              placeholder="e.g. Saturday $2/$5 home game"
+              value={name}
+              onChange={e => setName(e.target.value)}
+            />
+          </label>
+
+          <label className="live-setup-field">
+            <span className="live-setup-label">Venue / host</span>
+            <input
+              className="live-setup-input"
+              type="text"
+              placeholder="e.g. Chris's house, Harrah's Cherokee"
+              value={venue}
+              onChange={e => setVenue(e.target.value)}
+            />
+          </label>
+
+          <label className="live-setup-field">
+            <span className="live-setup-label">Address</span>
+            <input
+              className="live-setup-input"
+              type="text"
+              placeholder="Address or location note"
+              value={address}
+              onChange={e => setAddress(e.target.value)}
+            />
+          </label>
+
+          <label className="live-setup-field">
+            <span className="live-setup-label">Group tag</span>
+            <input
+              className="live-setup-input"
+              type="text"
+              placeholder="e.g. home-game, casino, tournament"
+              value={groupTag}
+              onChange={e => setGroupTag(e.target.value)}
+            />
+          </label>
+
+          <div className="live-setup-field">
+            <span className="live-setup-label">Starting blinds</span>
+            <div className="live-setup-blinds-row">
+              <input
+                className="live-setup-input live-setup-blind-input"
+                type="text"
+                value={currency}
+                placeholder="$"
+                title="Symbol shown before money amounts, like $ or €"
+                onChange={e => setCurrency(e.target.value)}
+                aria-label="Money symbol"
+              />
+              <input
+                className="live-setup-input live-setup-blind-input"
+                type="number"
+                min={0}
+                step={0.5}
+                value={smallBlindRaw}
+                onChange={e => setSmallBlindRaw(e.target.value)}
+                aria-label="Small blind"
+              />
+              <span className="live-setup-blind-separator">/</span>
+              <input
+                className="live-setup-input live-setup-blind-input"
+                type="number"
+                min={0.01}
+                step={0.5}
+                value={bigBlindRaw}
+                onChange={e => setBigBlindRaw(e.target.value)}
+                aria-label="Big blind"
+              />
+            </div>
+          </div>
+
+          <div className="live-setup-field">
+            <span className="live-setup-label">Default starting stack (BB)</span>
+            <div className="live-setup-blinds-row">
+              <input
+                className="live-setup-input live-setup-blind-input"
+                type="number"
+                min={0}
+                step={1}
+                value={defaultStackRaw}
+                onChange={e => setDefaultStackRaw(e.target.value)}
+                aria-label="Default starting stack in big blinds"
+              />
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setStackRawBySeat(Object.fromEntries(occupiedSeats.map(seatId => [String(seatId), defaultStackRaw])))}
+              >
+                Apply to all
+              </button>
+            </div>
+          </div>
+
+          <label className="live-setup-field">
+            <span className="live-setup-label">Notes</span>
+            <input
+              className="live-setup-input"
+              type="text"
+              placeholder="Game details, tournament notes, table rules..."
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+            />
+          </label>
+
+          {occupiedSeats.length > 0 && (
+            <div className="live-setup-stack-list">
+              {occupiedSeats.map(seatId => (
+                <label key={seatId} className="hl-sit-field">
+                  <span className="hl-label">{playerNames[seatId] ?? `Seat ${seatId + 1}`} stack (BB)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    className="hl-num-input"
+                    value={stackRawBySeat[String(seatId)] ?? defaultStackRaw}
+                    onChange={e => setStackRawBySeat(prev => ({ ...prev, [String(seatId)]: e.target.value }))}
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      </details>
     </div>
   );
 }
