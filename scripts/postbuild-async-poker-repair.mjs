@@ -1,5 +1,5 @@
-if (process.env.NODE_ENV !== 'production') {
-  console.log('[async-poker-repair] skipped outside production build');
+if (!process.env.DATABASE_URL) {
+  console.log('[async-poker-repair] skipped because DATABASE_URL is not set');
 } else {
   await import('./repair-async-poker-schema.mjs');
 }
