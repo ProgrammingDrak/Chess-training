@@ -3,7 +3,7 @@ import type {
   AppNotification,
   AsyncPokerAction,
   AsyncPokerGame,
-  AsyncPokerQueuedAction,
+  AsyncPokerQueuedActionInput,
   NotificationPreference,
 } from '../types/asyncPoker';
 
@@ -176,7 +176,7 @@ export function useAsyncPoker(enabled: boolean) {
 
   const queueAction = useCallback(async (
     gameId: string,
-    input: Pick<AsyncPokerQueuedAction, 'action' | 'amountChips' | 'note'> & { actorUserId?: number },
+    input: AsyncPokerQueuedActionInput,
   ) => {
     const res = await fetch(`/api/async-poker/games/${encodeURIComponent(gameId)}/queued-action`, {
       method: 'POST',
