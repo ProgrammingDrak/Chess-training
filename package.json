@@ -10,7 +10,6 @@
     "db:local:start": "powershell -ExecutionPolicy Bypass -File ./scripts/start-local-postgres.ps1",
     "db:local:refresh": "powershell -ExecutionPolicy Bypass -File ./scripts/refresh-local-db.ps1",
     "build": "tsc && vite build",
-    "postbuild": "node scripts/postbuild-async-poker-repair.mjs",
     "start": "node server.js",
     "test": "vitest run",
     "test:watch": "vitest"
