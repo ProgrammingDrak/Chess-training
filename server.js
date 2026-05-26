@@ -19,7 +19,7 @@
 import express from 'express';
 import session from 'express-session';
 import bcrypt from 'bcryptjs';
-import { createPublicKey, createVerify, randomUUID } from 'crypto';
+import { createPublicKey, createVerify, randomUUID, timingSafeEqual } from 'crypto';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -57,6 +57,7 @@ const ASYNC_POKER_SUITS = ['h', 'd', 'c', 's'];
 const ASYNC_POKER_MIN_TURN_SECONDS = 5;
 const ASYNC_POKER_MAX_TURN_SECONDS = 5 * 24 * 60 * 60;
 const ASYNC_POKER_DEFAULT_STACK = 1000;
+const ASYNC_POKER_SCHEMA_REPAIR_TOKEN = process.env.ASYNC_POKER_SCHEMA_REPAIR_TOKEN ?? '';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TIER_RANK = {
   user: 0,
@@ -113,6 +114,13 @@ function normalizePromoCode(code) {
 
 function isValidPromoCode(code) {
   return /^[A-Z0-9_-]{3,32}$/.test(code);
+}
+
+function constantTimeStringEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left ?? ''), 'utf8');
+  const rightBuffer = Buffer.from(String(right ?? ''), 'utf8');
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function addDays(date, days) {
@@ -3209,6 +3217,232 @@ app.post('/api/async-poker/games/:id/actions', requireDb, requireAuth, async (re
     res.status(500).json({ error: 'Failed to record poker action' });
   } finally {
     client.release();
+  }
+});
+
+const ASYNC_POKER_REPAIR_TABLES = [
+  'notification_preferences',
+  'in_app_notifications',
+  'async_poker_games',
+  'async_poker_game_players',
+  'async_poker_npc_users',
+  'async_poker_actions',
+];
+
+const ASYNC_POKER_REPAIR_SEQUENCES = [
+  'in_app_notifications_id_seq',
+  'async_poker_actions_id_seq',
+];
+
+const ASYNC_POKER_REPAIR_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS notification_preferences (
+  user_id                  INTEGER PRIMARY KEY,
+  email_turn_notifications BOOLEAN NOT NULL DEFAULT FALSE,
+  discord_turn_notifications BOOLEAN NOT NULL DEFAULT FALSE,
+  discord_user_id          VARCHAR(64),
+  created_at               TIMESTAMPTZ DEFAULT NOW(),
+  updated_at               TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS in_app_notifications (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL,
+  type        VARCHAR(60) NOT NULL,
+  title       VARCHAR(160) NOT NULL,
+  body        TEXT NOT NULL,
+  action_path VARCHAR(500),
+  metadata    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  read_at     TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE in_app_notifications
+  ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+CREATE INDEX IF NOT EXISTS idx_in_app_notifications_user_created
+  ON in_app_notifications (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_in_app_notifications_user_unread
+  ON in_app_notifications (user_id, read_at)
+  WHERE read_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS async_poker_games (
+  id                      UUID PRIMARY KEY,
+  host_user_id            INTEGER NOT NULL,
+  name                    VARCHAR(120) NOT NULL,
+  table_size              INTEGER NOT NULL DEFAULT 6 CHECK (table_size BETWEEN 2 AND 9),
+  turn_seconds            INTEGER NOT NULL DEFAULT 86400 CHECK (turn_seconds BETWEEN 5 AND 432000),
+  status                  VARCHAR(20) NOT NULL DEFAULT 'waiting'
+    CHECK (status IN ('waiting', 'active', 'finished')),
+  current_player_user_id  INTEGER,
+  current_turn_started_at TIMESTAMPTZ,
+  current_turn_expires_at TIMESTAMPTZ,
+  hand_number             INTEGER NOT NULL DEFAULT 1,
+  pot_chips               INTEGER NOT NULL DEFAULT 0 CHECK (pot_chips >= 0),
+  small_blind_chips       INTEGER NOT NULL DEFAULT 10 CHECK (small_blind_chips > 0),
+  big_blind_chips         INTEGER NOT NULL DEFAULT 20 CHECK (big_blind_chips > 0),
+  state                   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at              TIMESTAMPTZ DEFAULT NOW(),
+  updated_at              TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_async_poker_games_status_updated
+  ON async_poker_games (status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_async_poker_games_current_player
+  ON async_poker_games (current_player_user_id, current_turn_expires_at);
+
+CREATE TABLE IF NOT EXISTS async_poker_game_players (
+  game_id     UUID NOT NULL REFERENCES async_poker_games(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL,
+  seat_index  INTEGER NOT NULL CHECK (seat_index BETWEEN 0 AND 8),
+  stack_chips INTEGER NOT NULL DEFAULT 1000 CHECK (stack_chips >= 0),
+  status      VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'folded', 'left')),
+  joined_at   TIMESTAMPTZ DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ,
+  PRIMARY KEY (game_id, user_id),
+  UNIQUE (game_id, seat_index)
+);
+CREATE INDEX IF NOT EXISTS idx_async_poker_players_user
+  ON async_poker_game_players (user_id, joined_at DESC);
+
+CREATE TABLE IF NOT EXISTS async_poker_npc_users (
+  user_id    INTEGER PRIMARY KEY,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS async_poker_actions (
+  id           BIGSERIAL PRIMARY KEY,
+  game_id      UUID NOT NULL REFERENCES async_poker_games(id) ON DELETE CASCADE,
+  user_id      INTEGER NOT NULL,
+  hand_number  INTEGER NOT NULL DEFAULT 1,
+  action       VARCHAR(20) NOT NULL
+    CHECK (action IN ('check', 'call', 'bet', 'raise', 'fold', 'pass', 'timeout', 'join', 'start', 'end', 'ready_next', 'show')),
+  street       VARCHAR(20) NOT NULL DEFAULT 'preflop'
+    CHECK (street IN ('preflop', 'flop', 'turn', 'river')),
+  amount_chips INTEGER CHECK (amount_chips IS NULL OR amount_chips >= 0),
+  note         TEXT,
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE async_poker_actions
+  ADD COLUMN IF NOT EXISTS hand_number INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE async_poker_actions
+  ADD COLUMN IF NOT EXISTS street VARCHAR(20) NOT NULL DEFAULT 'preflop';
+ALTER TABLE async_poker_actions
+  DROP CONSTRAINT IF EXISTS async_poker_actions_action_check;
+ALTER TABLE async_poker_actions
+  ADD CONSTRAINT async_poker_actions_action_check
+  CHECK (action IN ('check', 'call', 'bet', 'raise', 'fold', 'pass', 'timeout', 'join', 'start', 'end', 'ready_next', 'show'));
+DO $$
+BEGIN
+  ALTER TABLE async_poker_actions
+    ADD CONSTRAINT async_poker_actions_street_check
+    CHECK (street IN ('preflop', 'flop', 'turn', 'river'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_async_poker_actions_game_created
+  ON async_poker_actions (game_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_async_poker_actions_game_hand_created
+  ON async_poker_actions (game_id, hand_number DESC, created_at DESC);
+`;
+
+async function getAsyncPokerRepairSnapshot(db) {
+  const roleResult = await db.query(
+    `SELECT current_user,
+            session_user,
+            current_database(),
+            current_schema(),
+            has_schema_privilege(current_user, 'public', 'CREATE') AS can_create_public`
+  );
+  const { rows: relationRows } = await db.query(
+    `SELECT c.relname,
+            c.relkind,
+            c.relowner::regrole::text AS owner,
+            c.relrowsecurity,
+            c.relforcerowsecurity
+     FROM pg_class c
+     WHERE c.relnamespace = 'public'::regnamespace
+       AND c.relname = ANY($1::text[])
+     ORDER BY c.relkind, c.relname`,
+    [[...ASYNC_POKER_REPAIR_TABLES, ...ASYNC_POKER_REPAIR_SEQUENCES]]
+  );
+  const relations = Object.fromEntries(
+    relationRows.map((row) => [
+      row.relname,
+      {
+        kind: row.relkind,
+        owner: row.owner,
+        rowSecurity: row.relrowsecurity,
+        forceRowSecurity: row.relforcerowsecurity,
+      },
+    ])
+  );
+  const counts = {};
+  for (const table of ASYNC_POKER_REPAIR_TABLES) {
+    if (!relations[table]) {
+      counts[table] = null;
+      continue;
+    }
+    try {
+      const { rows } = await db.query(`SELECT COUNT(*)::int AS count FROM public.${table}`);
+      counts[table] = rows[0].count;
+    } catch (err) {
+      counts[table] = { error: err.message, code: err.code ?? null };
+    }
+  }
+  return {
+    role: roleResult.rows[0],
+    relations,
+    counts,
+  };
+}
+
+function asyncPokerRepairHasRows(snapshot) {
+  return ASYNC_POKER_REPAIR_TABLES.some((table) => {
+    const count = snapshot.counts[table];
+    return typeof count === 'number' && count > 0;
+  });
+}
+
+function asyncPokerRepairHasCountErrors(snapshot) {
+  return ASYNC_POKER_REPAIR_TABLES.some((table) => {
+    const count = snapshot.counts[table];
+    return count && typeof count === 'object' && count.error;
+  });
+}
+
+app.post('/api/admin/repair/async-poker-schema', requireDb, requireAuth, requireAdmin, async (req, res) => {
+  try {
+    if (!ASYNC_POKER_SCHEMA_REPAIR_TOKEN) {
+      return res.status(404).json({ error: 'Repair endpoint is disabled' });
+    }
+    const token = req.get('x-repair-token') ?? '';
+    if (!constantTimeStringEqual(token, ASYNC_POKER_SCHEMA_REPAIR_TOKEN)) {
+      return res.status(403).json({ error: 'Invalid repair token' });
+    }
+
+    const before = await getAsyncPokerRepairSnapshot(pool);
+    if (asyncPokerRepairHasCountErrors(before)) {
+      return res.status(409).json({
+        error: 'Could not verify async poker table row counts',
+        before,
+      });
+    }
+    if (asyncPokerRepairHasRows(before)) {
+      return res.status(409).json({
+        error: 'Async poker schema repair aborted because one or more tables contain rows',
+        before,
+      });
+    }
+
+    await pool.query(ASYNC_POKER_REPAIR_SCHEMA_SQL);
+    const after = await getAsyncPokerRepairSnapshot(pool);
+    res.json({
+      ok: true,
+      before,
+      after,
+      createdTables: ASYNC_POKER_REPAIR_TABLES.filter((table) => Boolean(after.relations[table])),
+      createdSequences: ASYNC_POKER_REPAIR_SEQUENCES.filter((sequence) => Boolean(after.relations[sequence])),
+    });
+  } catch (err) {
+    console.error('[admin] async poker repair error:', err);
+    res.status(500).json({ error: 'Failed to repair async poker schema' });
   }
 });
 
