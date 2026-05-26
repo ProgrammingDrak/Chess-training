@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+- Repaired production Async Poker Supabase schema ownership so table creation and loading work on Render.
+
 ## [0.2.0.0] - 2026-03-27
 
 ### Added
