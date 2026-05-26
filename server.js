@@ -34,6 +34,11 @@ import {
   totalPotBB,
   unfoldedSeats,
 } from './src/utils/pokerGameplay.js';
+import {
+  asyncPokerQueuedActionNote,
+  normalizeAsyncPokerQueuedAction,
+  prepareAsyncPokerQueuedAction,
+} from './src/utils/asyncPokerQueuedAction.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -1126,6 +1131,9 @@ function normalizeAsyncPokerHandState(value) {
   const pendingActions = source.pendingActions && typeof source.pendingActions === 'object' && !Array.isArray(source.pendingActions)
     ? source.pendingActions
     : {};
+  const holeCards = source.holeCards && typeof source.holeCards === 'object' && !Array.isArray(source.holeCards)
+    ? source.holeCards
+    : {};
 
   return {
     ...source,
@@ -1136,9 +1144,10 @@ function normalizeAsyncPokerHandState(value) {
     previousHandResult: source.previousHandResult && typeof source.previousHandResult === 'object' && !Array.isArray(source.previousHandResult)
       ? source.previousHandResult
       : null,
-    holeCards: source.holeCards && typeof source.holeCards === 'object' && !Array.isArray(source.holeCards)
-      ? source.holeCards
-      : {},
+    holeCards,
+    dealtUserIds: Array.isArray(source.dealtUserIds)
+      ? source.dealtUserIds
+      : Object.keys(holeCards).map((userId) => Number(userId)).filter(Number.isFinite),
     pendingActions,
     foldedUserIds: Array.isArray(source.foldedUserIds) ? source.foldedUserIds : [],
     streetActions: Object.fromEntries(
@@ -1150,6 +1159,7 @@ function normalizeAsyncPokerHandState(value) {
     winnerUserIds: Array.isArray(source.winnerUserIds) ? source.winnerUserIds : [],
     shownUserIds: Array.isArray(source.shownUserIds) ? source.shownUserIds : [],
     nextHandReadyUserIds: Array.isArray(source.nextHandReadyUserIds) ? source.nextHandReadyUserIds : [],
+    pendingBigBlindUserIds: Array.isArray(source.pendingBigBlindUserIds) ? source.pendingBigBlindUserIds : [],
   };
 }
 
@@ -1199,6 +1209,7 @@ function createAsyncPokerHandState(players, {
   buttonSeat,
   smallBlindChips,
   bigBlindChips,
+  pendingBigBlindUserIds = [],
 }) {
   const deck = shuffleAsyncPokerDeck(createAsyncPokerDeck());
   const sortedPlayers = [...players].sort((a, b) => a.seat_index - b.seat_index);
@@ -1211,7 +1222,7 @@ function createAsyncPokerHandState(players, {
     tableSize,
   });
   const playerIdBySeat = new Map(sortedPlayers.map((player) => [player.seat_index, String(player.user_id)]));
-  const actions = createForcedBlindActions({
+  let actions = createForcedBlindActions({
     baseActions: [],
     smallBlindSeat,
     bigBlindSeat,
@@ -1220,6 +1231,25 @@ function createAsyncPokerHandState(players, {
     currency: '',
     playerIdBySeat,
   });
+  const pendingBigBlindUserIdSet = new Set(pendingBigBlindUserIds.map(Number));
+  for (const player of sortedPlayers) {
+    if (!pendingBigBlindUserIdSet.has(Number(player.user_id))) continue;
+    const existingBlindChips = (
+      (player.seat_index === smallBlindSeat ? smallBlindChips : 0)
+      + (player.seat_index === bigBlindSeat ? bigBlindChips : 0)
+    );
+    const postedBlindChips = Math.max(0, bigBlindChips - existingBlindChips);
+    if (postedBlindChips <= 0 || bigBlindChips <= 0) continue;
+    actions = appendLiveAction({
+      actions,
+      street: 'preflop',
+      seatId: player.seat_index,
+      playerProfileId: String(player.user_id),
+      action: 'post-blind',
+      amount: postedBlindChips,
+      amountBB: postedBlindChips / bigBlindChips,
+    });
+  }
 
   for (let round = 0; round < 2; round += 1) {
     for (const player of sortedPlayers) {
@@ -1239,8 +1269,10 @@ function createAsyncPokerHandState(players, {
     bigBlindSeat,
     holeCards,
     foldedUserIds: [],
+    dealtUserIds: sortedPlayers.map((player) => player.user_id),
     shownUserIds: [],
     nextHandReadyUserIds: [],
+    pendingBigBlindUserIds: [],
     pendingActions: {},
     streetActions: {
       preflop: [],
@@ -1282,6 +1314,11 @@ function withoutPendingAsyncPokerAction(state, userId) {
   return { ...state, pendingActions };
 }
 
+function isAsyncPokerPlayerInCurrentHand(player, state) {
+  const cards = state.holeCards?.[String(player?.user_id)];
+  return player?.status === 'active' && Array.isArray(cards) && cards.length > 0;
+}
+
 async function dealAsyncPokerHand(db, {
   gameId,
   game,
@@ -1289,11 +1326,14 @@ async function dealAsyncPokerHand(db, {
   buttonSeat,
   handNumberIncrement = 0,
 }) {
+  const previousState = normalizeAsyncPokerHandState(game.state);
+  const pendingBigBlindUserIds = previousState.pendingBigBlindUserIds ?? [];
   const handState = createAsyncPokerHandState(players, {
     tableSize: game.table_size,
     buttonSeat,
     smallBlindChips: game.small_blind_chips,
     bigBlindChips: game.big_blind_chips,
+    pendingBigBlindUserIds,
   });
   const seatedPlayers = players.map((player) => player.seat_index).sort((a, b) => a - b);
   const firstPlayerSeat = firstPreflopActor({
@@ -1327,6 +1367,22 @@ async function dealAsyncPokerHand(db, {
       );
     }
   }
+  const pendingBigBlindUserIdSet = new Set(pendingBigBlindUserIds.map(Number));
+  for (const player of players) {
+    if (!pendingBigBlindUserIdSet.has(Number(player.user_id))) continue;
+    const existingBlindChips = (
+      (player.seat_index === handState.smallBlindSeat ? game.small_blind_chips : 0)
+      + (player.seat_index === handState.bigBlindSeat ? game.big_blind_chips : 0)
+    );
+    const postedBlindChips = Math.max(0, game.big_blind_chips - existingBlindChips);
+    if (postedBlindChips <= 0) continue;
+    await db.query(
+      `UPDATE async_poker_game_players
+       SET stack_chips = GREATEST(stack_chips - $3, 0)
+       WHERE game_id = $1 AND user_id = $2`,
+      [gameId, player.user_id, postedBlindChips]
+    );
+  }
 
   const startingPotChips = Math.round(totalPotBB(handState.actions) * game.big_blind_chips);
   await db.query(
@@ -1348,7 +1404,7 @@ async function dealAsyncPokerHand(db, {
 function activeAsyncPokerPlayers(players, state) {
   const folded = new Set((state.foldedUserIds ?? []).map(Number));
   return players
-    .filter((player) => player.status === 'active' && !folded.has(Number(player.user_id)))
+    .filter((player) => isAsyncPokerPlayerInCurrentHand(player, state) && !folded.has(Number(player.user_id)))
     .sort((a, b) => a.seat_index - b.seat_index);
 }
 
@@ -1563,7 +1619,7 @@ async function advanceAsyncPokerTurn(db, gameId, actorUserId, action) {
     } : {}),
   });
   const seatedPlayers = players
-    .filter((player) => player.status === 'active')
+    .filter((player) => isAsyncPokerPlayerInCurrentHand(player, state))
     .map((player) => player.seat_index)
     .sort((a, b) => a - b);
   const nextGuided = nextGuidedActionState({
@@ -1662,56 +1718,8 @@ async function advanceAsyncPokerTurn(db, gameId, actorUserId, action) {
   return nextPlayer?.user_id ?? null;
 }
 
-function prepareAsyncPokerQueuedAction({ game, players, state, actor, queuedAction }) {
-  if (!queuedAction || typeof queuedAction !== 'object') return null;
-  if (queuedAction.handNumber !== game.hand_number || queuedAction.street !== state.street) return null;
-  if (!['call', 'raise'].includes(queuedAction.action)) return null;
-  const folded = new Set((state.foldedUserIds ?? []).map(Number));
-  if (folded.has(Number(actor.user_id))) return null;
-
-  const summary = actionSummary(state.actions, state.street, actor.seat_index);
-  const stackChips = Math.max(0, Number(actor.stack_chips ?? 0));
-  const queuedAmount = Number.isInteger(queuedAction.amountChips) ? queuedAction.amountChips : -1;
-  const toCallChips = Math.max(0, Math.round(summary.toCallBB * game.big_blind_chips));
-  const contributionChips = Math.max(0, Math.round(summary.seatContributionBB * game.big_blind_chips));
-  const minRaiseToChips = Math.max(0, Math.round(summary.minRaiseToBB * game.big_blind_chips));
-
-  if (queuedAction.action === 'call') {
-    if (queuedAmount < 0) return null;
-    if (summary.canCheck) return { action: 'check', amountChips: null };
-    if (!summary.canCall || toCallChips <= 0 || toCallChips > stackChips) return null;
-    if (toCallChips > queuedAmount) return null;
-    return { action: 'call', amountChips: toCallChips };
-  }
-  if (queuedAction.action === 'raise') {
-    if (queuedAmount <= 0) return null;
-    if (summary.canBet) {
-      if (queuedAmount > stackChips) return null;
-      return { action: 'bet', amountChips: queuedAmount };
-    }
-    const commitChips = queuedAmount - contributionChips;
-    if (summary.canRaise && queuedAmount >= minRaiseToChips && commitChips > toCallChips && commitChips <= stackChips) {
-      return { action: 'raise', amountChips: commitChips };
-    }
-    if (summary.canCall && toCallChips > 0 && toCallChips <= queuedAmount && toCallChips <= stackChips) {
-      return { action: 'call', amountChips: toCallChips };
-    }
-    return null;
-  }
-  return null;
-}
-
-function asyncPokerQueuedActionNote(queuedAction) {
-  const amount = Number.isInteger(queuedAction.amountChips) ? `${queuedAction.amountChips} chips` : '';
-  const suffix = queuedAction.note ? ` · ${queuedAction.note}` : '';
-  if (queuedAction.action === 'call') return queuedAction.amountChips === 0
-    ? `Pre-decided: check if free${suffix}`
-    : `Pre-decided: call to ${amount}${suffix}`;
-  if (queuedAction.action === 'raise') return `Pre-decided: raise to ${amount}${suffix}`;
-  return `Pre-decided action${suffix}`;
-}
-
 function validateAsyncPokerManualAction({ game, state, actor, action, amountChips }) {
+  if (!isAsyncPokerPlayerInCurrentHand(actor, state)) return 'You will be dealt into the next hand';
   const summary = actionSummary(state.actions, state.street, actor.seat_index);
   const amount = Number.isInteger(amountChips) ? amountChips : null;
   const contributionChips = Math.max(0, Math.round(summary.seatContributionBB * game.big_blind_chips));
@@ -2469,7 +2477,7 @@ app.post('/api/async-poker/games/:id/join', requireDb, requireAuth, async (req, 
     }
     await client.query('BEGIN');
     const { rows: gameRows } = await client.query(
-      `SELECT id, table_size, status
+      `SELECT id, table_size, status, state
        FROM async_poker_games
        WHERE id = $1
        FOR UPDATE`,
@@ -2491,9 +2499,9 @@ app.post('/api/async-poker/games/:id/join', requireDb, requireAuth, async (req, 
       const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
       return res.json({ game: updated });
     }
-    if (game.status !== 'waiting') {
+    if (!['waiting', 'active'].includes(game.status)) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Only waiting games can be joined' });
+      return res.status(400).json({ error: 'This table is no longer open' });
     }
     const requestedSeat = req.body?.seatIndex === null || req.body?.seatIndex === undefined
       ? null
@@ -2528,10 +2536,30 @@ app.post('/api/async-poker/games/:id/join', requireDb, requireAuth, async (req, 
        ON CONFLICT (game_id, user_id) DO NOTHING`,
       [gameId, req.session.userId, seat, ASYNC_POKER_DEFAULT_STACK]
     );
+    if (game.status === 'active') {
+      const state = normalizeAsyncPokerHandState(game.state);
+      const pendingBigBlindUserIds = [
+        ...new Set([...(state.pendingBigBlindUserIds ?? []), req.session.userId].map(Number)),
+      ];
+      await client.query(
+        `UPDATE async_poker_games
+         SET state = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [gameId, { ...state, pendingBigBlindUserIds }]
+      );
+    } else {
+      await client.query(
+        `UPDATE async_poker_games
+         SET updated_at = NOW()
+         WHERE id = $1`,
+        [gameId]
+      );
+    }
     await client.query(
       `INSERT INTO async_poker_actions (game_id, user_id, action, note)
-       VALUES ($1, $2, 'join', 'Joined the table')`,
-      [gameId, req.session.userId]
+       VALUES ($1, $2, 'join', $3)`,
+      [gameId, req.session.userId, game.status === 'active' ? 'Joined the table for the next hand' : 'Joined the table']
     );
     await client.query('COMMIT');
     const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
@@ -2822,7 +2850,7 @@ app.post('/api/async-poker/games/:id/show-cards', requireDb, requireAuth, async 
       return res.status(400).json({ error: 'This table is not active' });
     }
     const { rows: playerRows } = await client.query(
-      `SELECT 1
+      `SELECT user_id, status
        FROM async_poker_game_players
        WHERE game_id = $1 AND user_id = $2 AND status = 'active'`,
       [gameId, req.session.userId]
@@ -2833,6 +2861,10 @@ app.post('/api/async-poker/games/:id/show-cards', requireDb, requireAuth, async 
     }
 
     const state = normalizeAsyncPokerHandState(game.state);
+    if (!isAsyncPokerPlayerInCurrentHand(playerRows[0], state)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'You will be dealt into the next hand' });
+    }
     if (!state.resolvedAt) {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Cards can be shown after the hand resolves' });
@@ -2939,27 +2971,58 @@ app.post('/api/async-poker/games/:id/queued-action', requireDb, requireAuth, asy
       return res.status(404).json({ error: 'Game not found' });
     }
     const action = typeof req.body?.action === 'string' ? req.body.action : '';
-    const amountRaw = req.body?.amountChips;
-    const amountChips = amountRaw === null || amountRaw === undefined || amountRaw === ''
-      ? null
-      : Number.parseInt(String(amountRaw), 10);
+    const parseChipAmount = (value) => (
+      value === null || value === undefined || value === ''
+        ? null
+        : Number.parseInt(String(value), 10)
+    );
+    const amountChips = parseChipAmount(req.body?.amountChips);
+    const raiseToChips = parseChipAmount(req.body?.raiseToChips);
+    const callCapChips = parseChipAmount(req.body?.callCapChips);
+    const callCapMode = req.body?.callCapMode === 'all_in' ? 'all_in' : 'amount';
     const note = trimText(req.body?.note, 500) || null;
     const actorUserIdRaw = req.body?.actorUserId;
     const requestedActorUserId = actorUserIdRaw === null || actorUserIdRaw === undefined || actorUserIdRaw === ''
       ? req.session.userId
       : Number.parseInt(String(actorUserIdRaw), 10);
 
-    if (!['call', 'raise'].includes(action)) {
+    if (action && !['call', 'raise'].includes(action)) {
       return res.status(400).json({ error: 'Pre-decision must be call to an amount or raise to an amount' });
     }
-    if (amountChips === null || !Number.isInteger(amountChips)) {
-      return res.status(400).json({ error: 'Add a chip amount for this pre-decision' });
+    if (amountChips !== null && !Number.isInteger(amountChips)) {
+      return res.status(400).json({ error: 'Amount must be a chip count' });
     }
-    if (action === 'call' && amountChips < 0) {
+    if (raiseToChips !== null && !Number.isInteger(raiseToChips)) {
+      return res.status(400).json({ error: 'Raise amount must be a chip count' });
+    }
+    if (callCapChips !== null && !Number.isInteger(callCapChips)) {
+      return res.status(400).json({ error: 'Call cap must be a chip count' });
+    }
+    if (req.body?.callCapMode && !['amount', 'all_in'].includes(req.body.callCapMode)) {
+      return res.status(400).json({ error: 'Call cap mode must be amount or all in' });
+    }
+    if (amountChips !== null && action === 'call' && amountChips < 0) {
       return res.status(400).json({ error: 'Call amount cannot be negative' });
     }
-    if (action === 'raise' && amountChips <= 0) {
+    if (amountChips !== null && action === 'raise' && amountChips <= 0) {
       return res.status(400).json({ error: 'Raise amount must be positive' });
+    }
+    if (raiseToChips !== null && raiseToChips <= 0) {
+      return res.status(400).json({ error: 'Raise amount must be positive' });
+    }
+    if (callCapChips !== null && callCapChips < 0) {
+      return res.status(400).json({ error: 'Call cap cannot be negative' });
+    }
+    const queuedAction = normalizeAsyncPokerQueuedAction({
+      action,
+      amountChips,
+      raiseToChips,
+      callCapChips,
+      callCapMode,
+      note,
+    });
+    if (!queuedAction) {
+      return res.status(400).json({ error: 'Add a raise target, a call cap, or choose call up to all in' });
     }
     if (!Number.isInteger(requestedActorUserId)) {
       return res.status(400).json({ error: 'Invalid player for pre-decision' });
@@ -3006,6 +3069,10 @@ app.post('/api/async-poker/games/:id/queued-action', requireDb, requireAuth, asy
     }
 
     const state = normalizeAsyncPokerHandState(game.state);
+    if (!isAsyncPokerPlayerInCurrentHand({ user_id: requestedActorUserId, status: player.status }, state)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'You will be dealt into the next hand' });
+    }
     const folded = new Set((state.foldedUserIds ?? []).map(Number));
     if (folded.has(Number(requestedActorUserId)) || state.street === 'showdown' || state.resolvedAt) {
       await client.query('ROLLBACK');
@@ -3014,8 +3081,11 @@ app.post('/api/async-poker/games/:id/queued-action', requireDb, requireAuth, asy
     const pendingActions = {
       ...(state.pendingActions ?? {}),
       [String(requestedActorUserId)]: {
-        action,
-        amountChips,
+        action: queuedAction.action,
+        amountChips: queuedAction.amountChips,
+        raiseToChips: queuedAction.raiseToChips,
+        callCapChips: queuedAction.callCapChips,
+        callCapMode: queuedAction.callCapMode,
         handNumber: game.hand_number,
         street: state.street,
         note,
@@ -3153,7 +3223,7 @@ app.post('/api/async-poker/games/:id/actions', requireDb, requireAuth, async (re
 
     const currentState = normalizeAsyncPokerHandState(game.state);
     const { rows: actorRows } = await client.query(
-      `SELECT user_id, seat_index, stack_chips
+      `SELECT user_id, seat_index, stack_chips, status
        FROM async_poker_game_players
        WHERE game_id = $1 AND user_id = $2`,
       [gameId, actorUserId]

@@ -12,11 +12,24 @@ export interface AsyncPokerShowdownResult {
 
 export interface AsyncPokerQueuedAction {
   action: 'call' | 'raise';
-  amountChips: number;
+  amountChips?: number | null;
+  raiseToChips?: number | null;
+  callCapChips?: number | null;
+  callCapMode?: 'amount' | 'all_in';
   handNumber: number;
   street: Exclude<AsyncPokerStreet, 'showdown'>;
   note?: string | null;
   createdAt: string;
+}
+
+export interface AsyncPokerQueuedActionInput {
+  action?: 'call' | 'raise';
+  amountChips?: number | null;
+  raiseToChips?: number | null;
+  callCapChips?: number | null;
+  callCapMode?: 'amount' | 'all_in';
+  note?: string | null;
+  actorUserId?: number;
 }
 
 export interface AsyncPokerHandState {
@@ -28,8 +41,10 @@ export interface AsyncPokerHandState {
   bigBlindSeat?: SeatId | null;
   holeCards?: Record<string, Card[]>;
   foldedUserIds?: number[];
+  dealtUserIds?: number[];
   shownUserIds?: number[];
   nextHandReadyUserIds?: number[];
+  pendingBigBlindUserIds?: number[];
   endedAt?: string | null;
   endedByUserId?: number | null;
   previousHandResult?: {

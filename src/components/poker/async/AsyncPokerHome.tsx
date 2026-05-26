@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useAsyncPoker } from '../../../hooks/useAsyncPoker';
-import type { AsyncPokerAction, AsyncPokerGame, AsyncPokerHandState, AsyncPokerQueuedAction, AsyncPokerRecentAction, AsyncPokerStreet, NotificationPreference } from '../../../types/asyncPoker';
+import type { AsyncPokerAction, AsyncPokerGame, AsyncPokerHandState, AsyncPokerQueuedAction, AsyncPokerQueuedActionInput, AsyncPokerRecentAction, AsyncPokerStreet, NotificationPreference } from '../../../types/asyncPoker';
 import type { LiveActionType, LiveHandAction, LiveStackSnapshot, LiveStreet, SeatId } from '../../../types/liveSession';
 import { derivePositions } from '../../../utils/livePoker';
 import { actionSummary, totalPotBB } from '../../../utils/liveHandEngine';
@@ -120,11 +120,24 @@ function actionAnimationLabel(action: AsyncPokerRecentAction['action']): string 
 }
 
 function queuedActionDescription(action: AsyncPokerQueuedAction): string {
-  const amount = `${action.amountChips} chips`;
-  if (action.action === 'call' && action.amountChips === 0) return `Check if free on ${streetLabel(action.street).toLowerCase()}`;
-  if (action.action === 'call') return `Call to ${amount} on ${streetLabel(action.street).toLowerCase()}`;
-  if (action.action === 'raise') return `Raise to ${amount} on ${streetLabel(action.street).toLowerCase()}`;
-  return actionLabel(action.action);
+  const parts: string[] = [];
+  const raiseToChips = typeof action.raiseToChips === 'number' && Number.isInteger(action.raiseToChips)
+    ? action.raiseToChips
+    : action.action === 'raise' && typeof action.amountChips === 'number' && Number.isInteger(action.amountChips)
+      ? action.amountChips
+      : null;
+  const callCapChips = typeof action.callCapChips === 'number' && Number.isInteger(action.callCapChips)
+    ? action.callCapChips
+    : action.amountChips;
+
+  if (raiseToChips !== null && raiseToChips > 0) parts.push(`Raise to ${raiseToChips} chips`);
+  if (action.callCapMode === 'all_in') {
+    parts.push('call up to all in');
+  } else if (typeof callCapChips === 'number' && Number.isInteger(callCapChips)) {
+    parts.push(callCapChips === 0 ? 'check if free' : `call up to ${callCapChips} chips`);
+  }
+  const description = parts.length > 0 ? parts.join('; ') : actionLabel(action.action);
+  return `${description} on ${streetLabel(action.street).toLowerCase()}`;
 }
 
 type AsyncHandResultSummary = {
@@ -861,7 +874,7 @@ function GameCard({
   onShowCards: (gameId: string) => Promise<void>;
   onAcknowledgeResult: (gameId: string) => Promise<void>;
   onAction: (gameId: string, action: AsyncPokerAction, amount?: number, note?: string) => Promise<void>;
-  onQueueAction: (gameId: string, input: Pick<AsyncPokerQueuedAction, 'action' | 'amountChips' | 'note'> & { actorUserId?: number }) => Promise<void>;
+  onQueueAction: (gameId: string, input: AsyncPokerQueuedActionInput) => Promise<void>;
   onClearQueuedAction: (gameId: string, actorUserId?: number) => Promise<void>;
   onCreateProfile: (name: string, tableSize: number) => Promise<PlayerProfile>;
 }) {
@@ -869,6 +882,7 @@ function GameCard({
   const [note, setNote] = useState('');
   const [preDecisionCallAmount, setPreDecisionCallAmount] = useState('');
   const [preDecisionRaiseAmount, setPreDecisionRaiseAmount] = useState('');
+  const [preDecisionCallAllIn, setPreDecisionCallAllIn] = useState(false);
   const [betSheetOpen, setBetSheetOpen] = useState(false);
   const [pickingSeat, setPickingSeat] = useState<number | null>(null);
   const [controlledNpcUserId, setControlledNpcUserId] = useState<number | null>(null);
@@ -884,9 +898,9 @@ function GameCard({
   const isCurrentPlayer = game.currentPlayerUserId === effectiveUserId;
   const isHostControlledNpcTurn = isHost && game.currentPlayerIsNpc;
   const canActForCurrentPlayer = isCurrentPlayer && (!controlledNpc || isHost);
-  const canJoin = game.status === 'waiting' && !game.isPlayer && game.players.length < game.tableSize;
+  const canJoin = game.status !== 'finished' && !game.isPlayer && game.players.length < game.tableSize;
   const canStart = game.status === 'waiting' && isHost && game.players.length >= 2;
-  const canShare = game.status === 'waiting' && game.players.length < game.tableSize;
+  const canShare = game.status !== 'finished' && game.players.length < game.tableSize;
   const canEnd = isHost && game.status !== 'finished';
   const isTableEnded = game.status === 'finished';
   const previousHandResult = game.state.previousHandResult ?? null;
@@ -901,13 +915,21 @@ function GameCard({
     .filter((player) => player.status === 'active')
     .map((player) => player.seatIndex)
     .sort((a, b) => a - b);
-  const buttonSeat = game.players.find((player) => player.userId === game.hostUserId)?.seatIndex ?? occupiedSeats[0] ?? null;
+  const currentHandUserIds = new Set((game.state.dealtUserIds ?? []).map(Number));
+  const currentHandSeats = game.players
+    .filter((player) => currentHandUserIds.has(player.userId))
+    .map((player) => player.seatIndex)
+    .sort((a, b) => a - b);
+  const buttonSeat = game.status === 'active'
+    ? game.state.buttonSeat ?? currentHandSeats[0] ?? null
+    : game.players.find((player) => player.userId === game.hostUserId)?.seatIndex ?? occupiedSeats[0] ?? null;
   const currentActionSeat = game.currentPlayerUserId === null
     ? null
     : game.players.find((player) => player.userId === game.currentPlayerUserId)?.seatIndex ?? null;
+  const positionSeats = game.status === 'active' ? currentHandSeats : occupiedSeats;
   const positions = buttonSeat === null
     ? undefined
-    : derivePositions(buttonSeat, occupiedSeats, game.tableSize);
+    : derivePositions(buttonSeat, positionSeats, game.tableSize);
   const liveActions = asyncActionsToLiveActions(game);
   const currentStreet = liveStreetForGame(game);
   const displayStreet = game.state.street ?? currentStreet;
@@ -920,11 +942,12 @@ function GameCard({
   const stackInfo = stackInfoForGame(game);
   const potBB = Math.max(game.potChips / Math.max(1, game.bigBlindChips), totalPotBB(liveActions));
   const heroPlayer = game.players.find((player) => player.userId === effectiveUserId) ?? null;
-  const heroSummary = heroPlayer ? actionSummary(liveActions, currentStreet, heroPlayer.seatIndex) : null;
+  const heroHasCards = heroHoleCards.length > 0;
+  const heroSummary = heroPlayer && heroHasCards ? actionSummary(liveActions, currentStreet, heroPlayer.seatIndex) : null;
   const pendingAction = game.state.pendingActions?.[String(effectiveUserId)] ?? null;
   const foldedUserIds = new Set((game.state.foldedUserIds ?? []).map(Number));
   const heroFolded = foldedUserIds.has(effectiveUserId);
-  const canPreDecide = game.status === 'active' && (game.isPlayer || Boolean(controlledNpc)) && !isCurrentPlayer && !heroFolded && Boolean(heroPlayer);
+  const canPreDecide = game.status === 'active' && heroHasCards && (game.isPlayer || Boolean(controlledNpc)) && !isCurrentPlayer && !heroFolded && Boolean(heroPlayer);
   const preDecisionCallDefaultAmount = heroSummary?.canCall
     ? Math.round(heroSummary.toCallBB * game.bigBlindChips)
     : 0;
@@ -937,7 +960,7 @@ function GameCard({
   const foldedSeatIds = game.players
     .filter((player) => foldedUserIds.has(player.userId))
     .map((player) => player.seatIndex);
-  const dealtSeatIds = game.status === 'active' ? occupiedSeats : [];
+  const dealtSeatIds = game.status === 'active' ? currentHandSeats : [];
   const burnPileCount = foldedSeatIds.length * 2;
 
   useEffect(() => {
@@ -1005,12 +1028,20 @@ function GameCard({
     return run(action, () => onAction(game.id, action, amountChips, note || undefined));
   };
 
-  const savePreDecision = (action: AsyncPokerQueuedAction['action'], amountInput: string, fallbackAmount: number) => {
-    const amountChips = Number.parseInt(amountInput || String(fallbackAmount), 10);
+  const savePreDecision = () => {
+    const raiseToChips = preDecisionRaiseAmount
+      ? Number.parseInt(preDecisionRaiseAmount, 10)
+      : null;
+    const callCapChips = preDecisionCallAllIn
+      ? null
+      : Number.parseInt(preDecisionCallAmount || String(preDecisionCallDefaultAmount), 10);
     void run('pre-decision', async () => {
       await onQueueAction(game.id, {
-        action,
-        amountChips,
+        action: raiseToChips !== null && raiseToChips > 0 ? 'raise' : 'call',
+        amountChips: raiseToChips !== null && raiseToChips > 0 ? raiseToChips : callCapChips,
+        raiseToChips: raiseToChips !== null && raiseToChips > 0 ? raiseToChips : null,
+        callCapChips,
+        callCapMode: preDecisionCallAllIn ? 'all_in' : 'amount',
         note: null,
         ...(controlledNpc ? { actorUserId: controlledNpc.userId } : {}),
       });
@@ -1164,14 +1195,23 @@ function GameCard({
           </div>
           <div className="async-predecision-controls">
             <label className="async-field">
-              <span>Call to</span>
+              <span>Call up to</span>
               <input
                 type="number"
                 min="0"
                 value={preDecisionCallAmount}
                 onChange={(event) => setPreDecisionCallAmount(event.target.value)}
+                disabled={preDecisionCallAllIn}
                 placeholder={String(preDecisionCallDefaultAmount)}
               />
+            </label>
+            <label className="async-toggle-row">
+              <input
+                type="checkbox"
+                checked={preDecisionCallAllIn}
+                onChange={(event) => setPreDecisionCallAllIn(event.target.checked)}
+              />
+              <span>All in</span>
             </label>
             <label className="async-field">
               <span>Raise to</span>
@@ -1187,19 +1227,11 @@ function GameCard({
           <div className="async-predecision-actions">
             <button
               type="button"
-              className="btn-secondary"
-              disabled={Boolean(busy)}
-              onClick={() => savePreDecision('call', preDecisionCallAmount, preDecisionCallDefaultAmount)}
-            >
-              Call to
-            </button>
-            <button
-              type="button"
               className="btn-primary"
               disabled={Boolean(busy)}
-              onClick={() => savePreDecision('raise', preDecisionRaiseAmount, preDecisionRaiseDefaultAmount)}
+              onClick={savePreDecision}
             >
-              Raise to
+              Save plan
             </button>
           </div>
         </section>
@@ -1230,7 +1262,7 @@ function GameCard({
         )}
         {canJoin && (
           <button className="btn-primary" disabled={Boolean(busy)} onClick={() => run('join', () => onJoin(game.id))}>
-            {busy === 'join' ? 'Joining...' : 'Join'}
+            {busy === 'join' ? 'Joining...' : game.status === 'active' ? 'Join next hand' : 'Join'}
           </button>
         )}
         {canStart && (
