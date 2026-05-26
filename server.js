@@ -837,36 +837,66 @@ function normalizeTableSize(value) {
 }
 
 function serializeNotificationPreference(row) {
+  const source = row ?? {};
   return {
-    emailTurnNotifications: Boolean(row.email_turn_notifications),
-    discordTurnNotifications: Boolean(row.discord_turn_notifications),
-    discordUserId: row.discord_user_id ?? '',
+    emailTurnNotifications: Boolean(source.email_turn_notifications),
+    discordTurnNotifications: Boolean(source.discord_turn_notifications),
+    discordUserId: source.discord_user_id ?? '',
     discordConfigured: Boolean(process.env.DISCORD_TURN_WEBHOOK_URL),
   };
 }
 
+function isNotificationStorageUnavailable(err) {
+  return err?.code === '42501' || err?.code === '42P01';
+}
+
+let notificationStorageDisabled = false;
+
+function disableNotificationStorage(err, context) {
+  notificationStorageDisabled = true;
+  console.warn(`[notifications] ${context}:`, err.message);
+}
+
 async function getNotificationPreference(userId, db = pool) {
-  await db.query(
-    `INSERT INTO notification_preferences (user_id)
-     VALUES ($1)
-     ON CONFLICT (user_id) DO NOTHING`,
-    [userId]
-  );
-  const { rows } = await db.query(
-    `SELECT email_turn_notifications, discord_turn_notifications, discord_user_id
-     FROM notification_preferences
-     WHERE user_id = $1`,
-    [userId]
-  );
-  return rows[0];
+  if (notificationStorageDisabled) return null;
+  try {
+    await db.query(
+      `INSERT INTO notification_preferences (user_id)
+       VALUES ($1)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [userId]
+    );
+    const { rows } = await db.query(
+      `SELECT email_turn_notifications, discord_turn_notifications, discord_user_id
+       FROM notification_preferences
+       WHERE user_id = $1`,
+      [userId]
+    );
+    return rows[0];
+  } catch (err) {
+    if (isNotificationStorageUnavailable(err)) {
+      disableNotificationStorage(err, 'preference storage unavailable');
+      return null;
+    }
+    throw err;
+  }
 }
 
 async function createInAppNotification(db, { userId, type, title, body, actionPath = null, metadata = {} }) {
-  await db.query(
-    `INSERT INTO in_app_notifications (user_id, type, title, body, action_path, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [userId, type, title, body, actionPath, metadata]
-  );
+  if (notificationStorageDisabled) return;
+  try {
+    await db.query(
+      `INSERT INTO in_app_notifications (user_id, type, title, body, action_path, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [userId, type, title, body, actionPath, metadata]
+    );
+  } catch (err) {
+    if (isNotificationStorageUnavailable(err)) {
+      disableNotificationStorage(err, 'in-app storage unavailable');
+      return;
+    }
+    throw err;
+  }
 }
 
 async function sendDiscordTurnMessage(discordUserId, game) {
@@ -903,19 +933,29 @@ function notificationTurnStartedSql() {
 }
 
 async function markAsyncPokerTurnNotificationsRead(db, { gameId, userId, turnStartedAt = null }) {
-  await db.query(
-    `UPDATE in_app_notifications
-     SET read_at = COALESCE(read_at, NOW())
-     WHERE user_id = $1
-       AND type IN ('async_poker_turn', 'async_poker_turn_reminder')
-       AND read_at IS NULL
-       AND metadata->>'asyncPokerGameId' = $2
-       AND ($3::text IS NULL OR metadata->>'turnStartedAt' = $3)`,
-    [userId, String(gameId), turnStartedAt]
-  );
+  if (notificationStorageDisabled) return;
+  try {
+    await db.query(
+      `UPDATE in_app_notifications
+       SET read_at = COALESCE(read_at, NOW())
+       WHERE user_id = $1
+         AND type IN ('async_poker_turn', 'async_poker_turn_reminder')
+         AND read_at IS NULL
+         AND metadata->>'asyncPokerGameId' = $2
+         AND ($3::text IS NULL OR metadata->>'turnStartedAt' = $3)`,
+      [userId, String(gameId), turnStartedAt]
+    );
+  } catch (err) {
+    if (isNotificationStorageUnavailable(err)) {
+      disableNotificationStorage(err, 'mark read skipped');
+      return;
+    }
+    throw err;
+  }
 }
 
 async function notifyAsyncPokerTurn(db, gameId, userId, options = {}) {
+  if (notificationStorageDisabled) return;
   const { rows } = await db.query(
     `SELECT g.id, g.name, g.turn_seconds, g.current_turn_started_at, g.current_turn_expires_at,
             u.id AS user_id, u.username, u.email,
@@ -987,25 +1027,36 @@ async function notifyAsyncPokerTurn(db, gameId, userId, options = {}) {
 }
 
 async function refreshAsyncPokerTurnReminders(userId, db = pool) {
+  if (notificationStorageDisabled) return;
   const turnStartedSql = notificationTurnStartedSql();
-  const { rows } = await db.query(
-    `SELECT g.id
-     FROM async_poker_games g
-     WHERE g.status = 'active'
-       AND g.current_player_user_id = $1
-       AND g.current_turn_expires_at IS NOT NULL
-       AND g.current_turn_expires_at > NOW()
-       AND g.current_turn_expires_at <= NOW() + INTERVAL '10 minutes'
-       AND NOT EXISTS (
-         SELECT 1
-         FROM in_app_notifications n
-         WHERE n.user_id = $1
-           AND n.type = 'async_poker_turn_reminder'
-           AND n.metadata->>'asyncPokerGameId' = g.id::text
-           AND n.metadata->>'turnStartedAt' = ${turnStartedSql}
-       )`,
-    [userId]
-  );
+  let rows = [];
+  try {
+    const result = await db.query(
+      `SELECT g.id
+       FROM async_poker_games g
+       WHERE g.status = 'active'
+         AND g.current_player_user_id = $1
+         AND g.current_turn_expires_at IS NOT NULL
+         AND g.current_turn_expires_at > NOW()
+         AND g.current_turn_expires_at <= NOW() + INTERVAL '10 minutes'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM in_app_notifications n
+           WHERE n.user_id = $1
+             AND n.type = 'async_poker_turn_reminder'
+             AND n.metadata->>'asyncPokerGameId' = g.id::text
+             AND n.metadata->>'turnStartedAt' = ${turnStartedSql}
+         )`,
+      [userId]
+    );
+    rows = result.rows;
+  } catch (err) {
+    if (isNotificationStorageUnavailable(err)) {
+      disableNotificationStorage(err, 'turn reminders skipped');
+      return;
+    }
+    throw err;
+  }
 
   for (const row of rows) {
     await notifyAsyncPokerTurn(db, row.id, userId, { reminder: true });
@@ -1013,26 +1064,57 @@ async function refreshAsyncPokerTurnReminders(userId, db = pool) {
 }
 
 async function clearStaleAsyncPokerTurnNotifications(userId, db = pool) {
+  if (notificationStorageDisabled) return;
   const turnStartedSql = notificationTurnStartedSql();
-  await db.query(
-    `UPDATE in_app_notifications n
-     SET read_at = COALESCE(n.read_at, NOW())
-     WHERE n.user_id = $1
-       AND n.read_at IS NULL
-       AND n.type IN ('async_poker_turn', 'async_poker_turn_reminder')
-       AND NOT EXISTS (
-         SELECT 1
-         FROM async_poker_games g
-         WHERE g.id::text = n.metadata->>'asyncPokerGameId'
-           AND g.status = 'active'
-           AND g.current_player_user_id = n.user_id
-           AND (
-             n.metadata->>'turnStartedAt' IS NULL
-             OR n.metadata->>'turnStartedAt' = ${turnStartedSql}
-           )
-       )`,
-    [userId]
-  );
+  try {
+    await db.query(
+      `UPDATE in_app_notifications n
+       SET read_at = COALESCE(n.read_at, NOW())
+       WHERE n.user_id = $1
+         AND n.read_at IS NULL
+         AND n.type IN ('async_poker_turn', 'async_poker_turn_reminder')
+         AND NOT EXISTS (
+           SELECT 1
+           FROM async_poker_games g
+           WHERE g.id::text = n.metadata->>'asyncPokerGameId'
+             AND g.status = 'active'
+             AND g.current_player_user_id = n.user_id
+             AND (
+               n.metadata->>'turnStartedAt' IS NULL
+               OR n.metadata->>'turnStartedAt' = ${turnStartedSql}
+             )
+         )`,
+      [userId]
+    );
+  } catch (err) {
+    if (isNotificationStorageUnavailable(err)) {
+      disableNotificationStorage(err, 'stale turn cleanup skipped');
+      return;
+    }
+    throw err;
+  }
+}
+
+async function listUnreadInAppNotifications(userId, db = pool) {
+  if (notificationStorageDisabled) return [];
+  try {
+    const { rows } = await db.query(
+      `SELECT id, type, title, body, action_path, metadata, read_at, created_at
+       FROM in_app_notifications
+       WHERE user_id = $1
+         AND read_at IS NULL
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      [userId]
+    );
+    return rows;
+  } catch (err) {
+    if (isNotificationStorageUnavailable(err)) {
+      disableNotificationStorage(err, 'unread list skipped');
+      return [];
+    }
+    throw err;
+  }
 }
 
 function normalizeAsyncPokerHandState(value) {
@@ -2292,20 +2374,12 @@ app.get('/api/async-poker/games', requireDb, requireAuth, async (req, res) => {
     const [games, preferenceResult, notificationsResult] = await Promise.all([
       listAsyncPokerGames(req.session.userId),
       getNotificationPreference(req.session.userId),
-      pool.query(
-        `SELECT id, type, title, body, action_path, metadata, read_at, created_at
-         FROM in_app_notifications
-         WHERE user_id = $1
-           AND read_at IS NULL
-         ORDER BY created_at DESC
-         LIMIT 20`,
-        [req.session.userId]
-      ),
+      listUnreadInAppNotifications(req.session.userId),
     ]);
     res.json({
       games,
       preference: serializeNotificationPreference(preferenceResult),
-      notifications: notificationsResult.rows.map((row) => ({
+      notifications: notificationsResult.map((row) => ({
         id: row.id,
         type: row.type,
         title: row.title,
@@ -2332,6 +2406,7 @@ app.post('/api/async-poker/games', requireDb, requireAuth, async (req, res) => {
       ? req.body.inviteUsernames.map((name) => trimText(name, 30).toLowerCase()).filter(Boolean)
       : [];
     const gameId = randomUUID();
+    const pendingInviteNotifications = [];
 
     await client.query('BEGIN');
     await client.query(
@@ -2360,7 +2435,7 @@ app.post('/api/async-poker/games', requireDb, requireAuth, async (req, res) => {
         [inviteUsernames, req.session.userId]
       );
       for (const invitee of invitees) {
-        await createInAppNotification(client, {
+        pendingInviteNotifications.push({
           userId: invitee.id,
           type: 'async_poker_invite',
           title: 'Async poker invite',
@@ -2371,6 +2446,9 @@ app.post('/api/async-poker/games', requireDb, requireAuth, async (req, res) => {
     }
 
     await client.query('COMMIT');
+    for (const notification of pendingInviteNotifications) {
+      await createInAppNotification(pool, notification);
+    }
     const game = await getAsyncPokerGameForUser(gameId, req.session.userId);
     res.status(201).json({ game });
   } catch (err) {
