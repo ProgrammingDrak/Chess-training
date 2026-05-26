@@ -11,15 +11,13 @@ CREATE TABLE IF NOT EXISTS users (
     CHECK (role IN ('user', 'admin')),
   membership_tier VARCHAR(20) NOT NULL DEFAULT 'diamond'
     CHECK (membership_tier IN ('user', 'gold', 'platinum', 'diamond')),
-  is_npc        BOOLEAN NOT NULL DEFAULT FALSE,
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS email VARCHAR(254),
   ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user',
-  ADD COLUMN IF NOT EXISTS membership_tier VARCHAR(20) NOT NULL DEFAULT 'diamond',
-  ADD COLUMN IF NOT EXISTS is_npc BOOLEAN NOT NULL DEFAULT FALSE;
+  ADD COLUMN IF NOT EXISTS membership_tier VARCHAR(20) NOT NULL DEFAULT 'diamond';
 
 ALTER TABLE users
   ALTER COLUMN membership_tier SET DEFAULT 'diamond';
@@ -195,7 +193,7 @@ CREATE INDEX IF NOT EXISTS idx_live_sessions_user ON live_sessions (user_id, sta
 
 -- ── Async Poker (hosted social turn-based games) ────────────────────────────
 CREATE TABLE IF NOT EXISTS notification_preferences (
-  user_id                  INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  user_id                  INTEGER PRIMARY KEY,
   email_turn_notifications BOOLEAN NOT NULL DEFAULT FALSE,
   discord_turn_notifications BOOLEAN NOT NULL DEFAULT FALSE,
   discord_user_id          VARCHAR(64),
@@ -205,7 +203,7 @@ CREATE TABLE IF NOT EXISTS notification_preferences (
 
 CREATE TABLE IF NOT EXISTS in_app_notifications (
   id          BIGSERIAL PRIMARY KEY,
-  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL,
   type        VARCHAR(60) NOT NULL,
   title       VARCHAR(160) NOT NULL,
   body        TEXT NOT NULL,
@@ -224,13 +222,13 @@ CREATE INDEX IF NOT EXISTS idx_in_app_notifications_user_unread
 
 CREATE TABLE IF NOT EXISTS async_poker_games (
   id                      UUID PRIMARY KEY,
-  host_user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  host_user_id            INTEGER NOT NULL,
   name                    VARCHAR(120) NOT NULL,
   table_size              INTEGER NOT NULL DEFAULT 6 CHECK (table_size BETWEEN 2 AND 9),
   turn_seconds            INTEGER NOT NULL DEFAULT 86400 CHECK (turn_seconds BETWEEN 5 AND 432000),
   status                  VARCHAR(20) NOT NULL DEFAULT 'waiting'
     CHECK (status IN ('waiting', 'active', 'finished')),
-  current_player_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  current_player_user_id  INTEGER,
   current_turn_started_at TIMESTAMPTZ,
   current_turn_expires_at TIMESTAMPTZ,
   hand_number             INTEGER NOT NULL DEFAULT 1,
@@ -248,7 +246,7 @@ CREATE INDEX IF NOT EXISTS idx_async_poker_games_current_player
 
 CREATE TABLE IF NOT EXISTS async_poker_game_players (
   game_id     UUID NOT NULL REFERENCES async_poker_games(id) ON DELETE CASCADE,
-  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL,
   seat_index  INTEGER NOT NULL CHECK (seat_index BETWEEN 0 AND 8),
   stack_chips INTEGER NOT NULL DEFAULT 1000 CHECK (stack_chips >= 0),
   status      VARCHAR(20) NOT NULL DEFAULT 'active'
@@ -261,10 +259,15 @@ CREATE TABLE IF NOT EXISTS async_poker_game_players (
 CREATE INDEX IF NOT EXISTS idx_async_poker_players_user
   ON async_poker_game_players (user_id, joined_at DESC);
 
+CREATE TABLE IF NOT EXISTS async_poker_npc_users (
+  user_id    INTEGER PRIMARY KEY,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS async_poker_actions (
   id           BIGSERIAL PRIMARY KEY,
   game_id      UUID NOT NULL REFERENCES async_poker_games(id) ON DELETE CASCADE,
-  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id      INTEGER NOT NULL,
   hand_number  INTEGER NOT NULL DEFAULT 1,
   action       VARCHAR(20) NOT NULL
     CHECK (action IN ('check', 'call', 'bet', 'raise', 'fold', 'pass', 'timeout', 'join', 'start', 'end', 'ready_next', 'show')),

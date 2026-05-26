@@ -918,12 +918,14 @@ async function markAsyncPokerTurnNotificationsRead(db, { gameId, userId, turnSta
 async function notifyAsyncPokerTurn(db, gameId, userId, options = {}) {
   const { rows } = await db.query(
     `SELECT g.id, g.name, g.turn_seconds, g.current_turn_started_at, g.current_turn_expires_at,
-            u.id AS user_id, u.username, u.email, u.is_npc,
+            u.id AS user_id, u.username, u.email,
+            (npc.user_id IS NOT NULL) AS is_npc,
             COALESCE(np.email_turn_notifications, false) AS email_turn_notifications,
             COALESCE(np.discord_turn_notifications, false) AS discord_turn_notifications,
             np.discord_user_id
      FROM async_poker_games g
      JOIN users u ON u.id = $2
+     LEFT JOIN async_poker_npc_users npc ON npc.user_id = u.id
      LEFT JOIN notification_preferences np ON np.user_id = u.id
      WHERE g.id = $1`,
     [gameId, userId]
@@ -1653,9 +1655,10 @@ async function settleAsyncPokerNpcTurns(db, gameId) {
   for (let step = 0; step < 24; step += 1) {
     const { rows: gameRows } = await db.query(
         `SELECT g.id, g.status, g.current_player_user_id, g.state, g.hand_number, g.big_blind_chips,
-              COALESCE(current_player.is_npc, false) AS current_player_is_npc
+              (current_player_npc.user_id IS NOT NULL) AS current_player_is_npc
        FROM async_poker_games g
        LEFT JOIN users current_player ON current_player.id = g.current_player_user_id
+       LEFT JOIN async_poker_npc_users current_player_npc ON current_player_npc.user_id = current_player.id
        WHERE g.id = $1
        FOR UPDATE OF g`,
       [gameId]
@@ -1732,10 +1735,11 @@ async function settleVisibleAsyncPokerNpcTurns(db, userId) {
     `SELECT g.id
      FROM async_poker_games g
      LEFT JOIN users current_player ON current_player.id = g.current_player_user_id
+     LEFT JOIN async_poker_npc_users current_player_npc ON current_player_npc.user_id = current_player.id
      WHERE g.status = 'active'
        AND g.current_player_user_id IS NOT NULL
        AND (
-         current_player.is_npc = TRUE
+         current_player_npc.user_id IS NOT NULL
          OR (COALESCE(g.state->'pendingActions', '{}'::jsonb) ? g.current_player_user_id::text)
        )
        AND (
@@ -1790,7 +1794,7 @@ async function listAsyncPokerGames(userId) {
     `SELECT g.*,
             host.username AS host_username,
             current_player.username AS current_player_username,
-            current_player.is_npc AS current_player_is_npc,
+            (current_player_npc.user_id IS NOT NULL) AS current_player_is_npc,
             EXISTS (
               SELECT 1 FROM async_poker_game_players mine
               WHERE mine.game_id = g.id AND mine.user_id = $1
@@ -1804,7 +1808,7 @@ async function listAsyncPokerGames(userId) {
                   'stackChips', p.stack_chips,
                   'status', p.status,
                   'joinedAt', p.joined_at,
-                  'isNpc', COALESCE(player.is_npc, false)
+                  'isNpc', player_npc.user_id IS NOT NULL
                 )
               ) FILTER (WHERE p.user_id IS NOT NULL),
               '[]'::jsonb
@@ -1831,14 +1835,16 @@ async function listAsyncPokerGames(userId) {
      FROM async_poker_games g
      JOIN users host ON host.id = g.host_user_id
      LEFT JOIN users current_player ON current_player.id = g.current_player_user_id
+     LEFT JOIN async_poker_npc_users current_player_npc ON current_player_npc.user_id = current_player.id
      LEFT JOIN async_poker_game_players p ON p.game_id = g.id
      LEFT JOIN users player ON player.id = p.user_id
+     LEFT JOIN async_poker_npc_users player_npc ON player_npc.user_id = player.id
      WHERE g.host_user_id = $1
         OR EXISTS (
           SELECT 1 FROM async_poker_game_players mine
           WHERE mine.game_id = g.id AND mine.user_id = $1
         )
-     GROUP BY g.id, host.username, current_player.username, current_player.is_npc
+     GROUP BY g.id, host.username, current_player.username, current_player_npc.user_id
      ORDER BY g.updated_at DESC
      LIMIT 50`,
     [userId]
@@ -1880,10 +1886,16 @@ async function createNpcUser(db, seed) {
     const username = `${base}${suffix}`.slice(0, 30);
     try {
       const { rows } = await db.query(
-        `INSERT INTO users (username, email, password_hash, role, membership_tier, is_npc)
-         VALUES ($1, NULL, $2, 'user', $3, TRUE)
+        `INSERT INTO users (username, email, password_hash, role, membership_tier)
+         VALUES ($1, NULL, $2, 'user', $3)
          RETURNING id, username`,
         [username, hash, DEFAULT_USER_TIER]
+      );
+      await db.query(
+        `INSERT INTO async_poker_npc_users (user_id)
+         VALUES ($1)
+         ON CONFLICT (user_id) DO NOTHING`,
+        [rows[0].id]
       );
       return rows[0];
     } catch (err) {
@@ -2492,8 +2504,8 @@ app.post('/api/async-poker/games/:id/npcs', requireDb, requireAuth, async (req, 
     const { rows: countRows } = await client.query(
       `SELECT COUNT(*)::int AS count
        FROM async_poker_game_players p
-       JOIN users u ON u.id = p.user_id
-       WHERE p.game_id = $1 AND u.is_npc = TRUE`,
+       JOIN async_poker_npc_users npc ON npc.user_id = p.user_id
+       WHERE p.game_id = $1`,
       [gameId]
     );
     const requestedName = trimText(req.body?.name, 24);
@@ -2898,9 +2910,9 @@ app.post('/api/async-poker/games/:id/queued-action', requireDb, requireAuth, asy
     }
 
     const { rows: playerRows } = await client.query(
-      `SELECT p.status, COALESCE(u.is_npc, false) AS is_npc
+      `SELECT p.status, (npc.user_id IS NOT NULL) AS is_npc
        FROM async_poker_game_players p
-       JOIN users u ON u.id = p.user_id
+       LEFT JOIN async_poker_npc_users npc ON npc.user_id = p.user_id
        WHERE p.game_id = $1 AND p.user_id = $2`,
       [gameId, requestedActorUserId]
     );
@@ -2981,9 +2993,9 @@ app.delete('/api/async-poker/games/:id/queued-action', requireDb, requireAuth, a
     }
     if (Number(requestedActorUserId) !== Number(req.session.userId)) {
       const { rows: playerRows } = await client.query(
-        `SELECT COALESCE(u.is_npc, false) AS is_npc
+        `SELECT (npc.user_id IS NOT NULL) AS is_npc
          FROM async_poker_game_players p
-         JOIN users u ON u.id = p.user_id
+         LEFT JOIN async_poker_npc_users npc ON npc.user_id = p.user_id
          WHERE p.game_id = $1 AND p.user_id = $2`,
         [gameId, requestedActorUserId]
       );
@@ -3037,9 +3049,10 @@ app.post('/api/async-poker/games/:id/actions', requireDb, requireAuth, async (re
     const { rows: gameRows } = await client.query(
       `SELECT g.id, g.host_user_id, g.status, g.current_player_user_id, g.current_turn_started_at, g.hand_number, g.state,
               g.big_blind_chips,
-              COALESCE(current_player.is_npc, false) AS current_player_is_npc
+              (current_player_npc.user_id IS NOT NULL) AS current_player_is_npc
        FROM async_poker_games g
        LEFT JOIN users current_player ON current_player.id = g.current_player_user_id
+       LEFT JOIN async_poker_npc_users current_player_npc ON current_player_npc.user_id = current_player.id
        WHERE g.id = $1
        FOR UPDATE OF g`,
       [gameId]
