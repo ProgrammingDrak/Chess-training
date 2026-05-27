@@ -2207,11 +2207,11 @@ button {
 
 .async-predecision-panel {
   display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
   border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 9%, var(--bg-2));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, var(--bg-2)), var(--bg-2));
 }
 
 .async-predecision-head,
@@ -2244,19 +2244,65 @@ button {
   overflow-wrap: anywhere;
 }
 
+.async-predecision-clear {
+  min-height: 36px;
+}
+
+.async-predecision-controls input:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
 .async-predecision-controls {
   display: grid;
-  grid-template-columns: minmax(120px, 0.38fr) minmax(160px, 0.62fr);
+  grid-template-columns: minmax(220px, 1fr) minmax(160px, 0.8fr);
+  align-items: end;
   gap: 10px;
 }
 
-.async-predecision-actions {
-  justify-content: flex-start;
+.async-predecision-call {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
 }
 
-.async-predecision-actions .btn-secondary,
+.async-predecision-actions {
+  justify-content: space-between;
+  padding-top: 2px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.async-predecision-actions > span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .async-predecision-actions .btn-primary {
-  min-width: 112px;
+  min-width: 120px;
+  justify-content: center;
+}
+
+.async-predecision-toggle {
+  min-height: 43px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.async-predecision-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
 }
 
 .async-seat-grid {
@@ -3035,6 +3081,10 @@ button {
     grid-template-columns: 1fr;
   }
 
+  .async-predecision-call {
+    grid-template-columns: 1fr;
+  }
+
   .async-table-lobby-card {
     grid-template-columns: 1fr;
   }
@@ -3058,10 +3108,15 @@ button {
     flex-direction: column;
   }
 
-  .async-predecision-actions .btn-secondary,
+  .async-predecision-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .async-predecision-actions .btn-primary {
     flex: 1;
-    min-width: 132px;
+    width: 100%;
+    min-width: 0;
   }
 }
 
