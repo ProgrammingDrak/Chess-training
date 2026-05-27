@@ -1185,7 +1185,7 @@ function GameCard({
             {pendingAction && (
               <button
                 type="button"
-                className="btn-secondary"
+                className="btn-ghost async-predecision-clear"
                 disabled={Boolean(busy)}
                 onClick={clearPreDecision}
               >
@@ -1193,26 +1193,29 @@ function GameCard({
               </button>
             )}
           </div>
+
           <div className="async-predecision-controls">
-            <label className="async-field">
-              <span>Call up to</span>
-              <input
-                type="number"
-                min="0"
-                value={preDecisionCallAmount}
-                onChange={(event) => setPreDecisionCallAmount(event.target.value)}
-                disabled={preDecisionCallAllIn}
-                placeholder={String(preDecisionCallDefaultAmount)}
-              />
-            </label>
-            <label className="async-toggle-row">
-              <input
-                type="checkbox"
-                checked={preDecisionCallAllIn}
-                onChange={(event) => setPreDecisionCallAllIn(event.target.checked)}
-              />
-              <span>All in</span>
-            </label>
+            <div className="async-predecision-call">
+              <label className="async-field">
+                <span>Call up to</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={preDecisionCallAmount}
+                  onChange={(event) => setPreDecisionCallAmount(event.target.value)}
+                  disabled={preDecisionCallAllIn}
+                  placeholder={String(preDecisionCallDefaultAmount)}
+                />
+              </label>
+              <label className="async-predecision-toggle">
+                <input
+                  type="checkbox"
+                  checked={preDecisionCallAllIn}
+                  onChange={(event) => setPreDecisionCallAllIn(event.target.checked)}
+                />
+                <span>All in</span>
+              </label>
+            </div>
             <label className="async-field">
               <span>Raise to</span>
               <input
@@ -1224,7 +1227,18 @@ function GameCard({
               />
             </label>
           </div>
+
           <div className="async-predecision-actions">
+            <span>
+              {[
+                preDecisionRaiseAmount ? `${heroSummary?.canBet ? 'Bet' : 'Raise'} to ${preDecisionRaiseAmount} chips` : null,
+                preDecisionCallAllIn
+                  ? 'Call up to all in'
+                  : preDecisionCallDefaultAmount > 0
+                    ? `Call up to ${preDecisionCallAmount || preDecisionCallDefaultAmount} chips`
+                    : 'Check if free',
+              ].filter(Boolean).join('; ')}
+            </span>
             <button
               type="button"
               className="btn-primary"
