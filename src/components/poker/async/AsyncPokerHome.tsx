@@ -982,7 +982,7 @@ function GameCard({
   const potBB = Math.max(game.potChips / Math.max(1, game.bigBlindChips), totalPotBB(liveActions));
   const heroPlayer = game.players.find((player) => player.userId === effectiveUserId) ?? null;
   const heroHasCards = heroHoleCards.length > 0;
-  const canLeave = game.isPlayer && !isHost && (game.status === 'waiting' || !heroHasCards);
+  const canLeave = game.isPlayer && game.status !== 'finished';
   const heroSummary = heroPlayer && heroHasCards ? actionSummary(liveActions, currentStreet, heroPlayer.seatIndex) : null;
   const pendingAction = game.state.pendingActions?.[String(effectiveUserId)] ?? null;
   const foldedUserIds = new Set((game.state.foldedUserIds ?? []).map(Number));
@@ -1117,7 +1117,10 @@ function GameCard({
   };
 
   const handleLeaveTable = () => {
-    if (!window.confirm(`Leave ${game.name}? Your seat will open up for another player.`)) return;
+    const leaveMessage = heroHasCards
+      ? `Leave ${game.name}? If you are still in this hand, finish or fold the hand before your seat can open up.`
+      : `Leave ${game.name}? Your seat will open up for another player.`;
+    if (!window.confirm(leaveMessage)) return;
     void run('leave', () => onLeave(game.id));
   };
 
@@ -1172,6 +1175,47 @@ function GameCard({
           </div>
         )}
       </div>
+
+      <div className="async-game-actions">
+        {canShare && (
+          <button className="btn-secondary" type="button" onClick={copyShareLink}>
+            Copy join link
+          </button>
+        )}
+        {canJoin && (
+          <button className="btn-primary" disabled={Boolean(busy)} onClick={() => run('join', () => onJoin(game.id))}>
+            {busy === 'join' ? 'Joining...' : game.status === 'active' ? 'Join next hand' : 'Join'}
+          </button>
+        )}
+        {canLeave && (
+          <button className="btn-secondary" disabled={Boolean(busy)} onClick={handleLeaveTable}>
+            {busy === 'leave' ? 'Leaving...' : 'Leave seat'}
+          </button>
+        )}
+        {canStart && (
+          <button className="btn-primary" disabled={Boolean(busy)} onClick={() => run('start', () => onStart(game.id))}>
+            {busy === 'start' ? 'Starting...' : 'Start'}
+          </button>
+        )}
+        {canEnd && (
+          <button className="btn-secondary" disabled={Boolean(busy)} onClick={handleEndTable}>
+            {busy === 'end' ? 'Ending...' : 'End table'}
+          </button>
+        )}
+        {canShowCards && (
+          <button className="btn-secondary" disabled={Boolean(busy)} onClick={() => run('show', () => onShowCards(game.id))}>
+            {busy === 'show' ? 'Showing...' : 'Show cards'}
+          </button>
+        )}
+        {canAcknowledgeResult && (
+          <button className="btn-primary" disabled={Boolean(busy)} onClick={() => run('ack-result', () => onAcknowledgeResult(game.id))}>
+            {busy === 'ack-result' ? 'Opening hand...' : 'Go to next hand'}
+          </button>
+        )}
+        {game.status === 'finished' && <span className="async-muted">Finished</span>}
+      </div>
+      {error && <p className="auth-error async-action-error" role="alert">{error}</p>}
+      {shareStatus && <p className="async-share-status">{shareStatus}</p>}
 
       <PokerTable
         tableSize={game.tableSize}
@@ -1312,47 +1356,6 @@ function GameCard({
           showWinner={false}
         />
       )}
-
-      <div className="async-game-actions">
-        {canShare && (
-          <button className="btn-secondary" type="button" onClick={copyShareLink}>
-            Copy join link
-          </button>
-        )}
-        {canJoin && (
-          <button className="btn-primary" disabled={Boolean(busy)} onClick={() => run('join', () => onJoin(game.id))}>
-            {busy === 'join' ? 'Joining...' : game.status === 'active' ? 'Join next hand' : 'Join'}
-          </button>
-        )}
-        {canLeave && (
-          <button className="btn-secondary" disabled={Boolean(busy)} onClick={handleLeaveTable}>
-            {busy === 'leave' ? 'Leaving...' : 'Leave table'}
-          </button>
-        )}
-        {canStart && (
-          <button className="btn-primary" disabled={Boolean(busy)} onClick={() => run('start', () => onStart(game.id))}>
-            {busy === 'start' ? 'Starting...' : 'Start'}
-          </button>
-        )}
-        {canEnd && (
-          <button className="btn-secondary" disabled={Boolean(busy)} onClick={handleEndTable}>
-            {busy === 'end' ? 'Ending...' : 'End table'}
-          </button>
-        )}
-        {canShowCards && (
-          <button className="btn-secondary" disabled={Boolean(busy)} onClick={() => run('show', () => onShowCards(game.id))}>
-            {busy === 'show' ? 'Showing...' : 'Show cards'}
-          </button>
-        )}
-        {canAcknowledgeResult && (
-          <button className="btn-primary" disabled={Boolean(busy)} onClick={() => run('ack-result', () => onAcknowledgeResult(game.id))}>
-            {busy === 'ack-result' ? 'Opening hand...' : 'Go to next hand'}
-          </button>
-        )}
-        {game.status === 'finished' && <span className="async-muted">Finished</span>}
-      </div>
-      {error && <p className="auth-error async-action-error" role="alert">{error}</p>}
-      {shareStatus && <p className="async-share-status">{shareStatus}</p>}
 
       {pickingSeat !== null && (
         <AsyncSeatPicker
@@ -1734,7 +1737,7 @@ export function AsyncPokerHome({
                 <strong>{activeGame.name}</strong>
               </div>
               <button type="button" className="btn-secondary" onClick={() => setActiveGameId(null)}>
-                Back to host screen
+                Leave table
               </button>
             </div>
             <GameCard
