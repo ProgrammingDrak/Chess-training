@@ -1315,6 +1315,7 @@ function GameCard({
         )}
         {game.status === 'finished' && <span className="async-muted">Finished</span>}
       </div>
+      {error && <p className="auth-error async-action-error" role="alert">{error}</p>}
       {shareStatus && <p className="async-share-status">{shareStatus}</p>}
 
       {pickingSeat !== null && (
@@ -1375,7 +1376,6 @@ function GameCard({
       )}
 
       <AsyncActionHistory game={game} />
-      {error && <p className="auth-error">{error}</p>}
     </article>
   );
 }
