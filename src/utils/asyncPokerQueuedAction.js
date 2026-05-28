@@ -7,6 +7,17 @@ function integerOrNull(value) {
 export function normalizeAsyncPokerQueuedAction(queuedAction) {
   if (!queuedAction || typeof queuedAction !== 'object') return null;
 
+  if (queuedAction.action === 'fold') {
+    return {
+      ...queuedAction,
+      action: 'fold',
+      amountChips: null,
+      raiseToChips: null,
+      callCapChips: null,
+      callCapMode: 'amount',
+    };
+  }
+
   const legacyAction = ['call', 'raise'].includes(queuedAction.action) ? queuedAction.action : null;
   const legacyAmount = integerOrNull(queuedAction.amountChips);
   const explicitRaiseTo = integerOrNull(queuedAction.raiseToChips);
@@ -39,6 +50,8 @@ export function prepareAsyncPokerQueuedAction({ game, state, actor, queuedAction
 
   const folded = new Set((state.foldedUserIds ?? []).map(Number));
   if (folded.has(Number(actor.user_id))) return null;
+
+  if (normalized.action === 'fold') return { action: 'fold', amountChips: null };
 
   const summary = actionSummary(state.actions, state.street, actor.seat_index);
   const stackChips = Math.max(0, Number(actor.stack_chips ?? 0));
@@ -83,6 +96,7 @@ export function asyncPokerQueuedActionNote(queuedAction) {
   if (!normalized) return 'Pre-decided action';
 
   const parts = [];
+  if (normalized.action === 'fold') parts.push('fold');
   if (normalized.raiseToChips !== null) parts.push(`raise to ${normalized.raiseToChips} chips`);
   if (normalized.callCapMode === 'all_in') {
     parts.push('call up to all in');
