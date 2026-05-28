@@ -2631,10 +2631,7 @@ app.post('/api/async-poker/games/:id/leave', requireDb, requireAuth, async (req,
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Game not found' });
     }
-    if (Number(game.host_user_id) === Number(req.session.userId)) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Hosts can end the table instead of leaving it' });
-    }
+    const leavingHost = Number(game.host_user_id) === Number(req.session.userId);
     if (!['waiting', 'active'].includes(game.status)) {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'This table is no longer open' });
@@ -2659,6 +2656,32 @@ app.post('/api/async-poker/games/:id/leave', requireDb, requireAuth, async (req,
       return res.status(400).json({ error: 'Finish this hand before leaving the table' });
     }
 
+    let nextHostUserId = Number(game.host_user_id);
+    let nextStatus = game.status;
+    let leaveNote = game.status === 'active' ? 'Left before being dealt into the next hand' : 'Left the table';
+    if (leavingHost) {
+      const { rows: hostCandidateRows } = await client.query(
+        `SELECT p.user_id
+         FROM async_poker_game_players p
+         LEFT JOIN async_poker_npc_users npc ON npc.user_id = p.user_id
+         WHERE p.game_id = $1
+           AND p.user_id <> $2
+           AND p.status = 'active'
+           AND npc.user_id IS NULL
+         ORDER BY p.joined_at ASC, p.seat_index ASC
+         LIMIT 1`,
+        [gameId, req.session.userId]
+      );
+      const hostCandidate = hostCandidateRows[0]?.user_id ?? null;
+      if (hostCandidate) {
+        nextHostUserId = hostCandidate;
+        leaveNote = 'Host left and table ownership was transferred';
+      } else {
+        nextStatus = 'finished';
+        leaveNote = 'Host left and closed the table';
+      }
+    }
+
     await client.query(
       `DELETE FROM async_poker_game_players
        WHERE game_id = $1 AND user_id = $2`,
@@ -2666,10 +2689,12 @@ app.post('/api/async-poker/games/:id/leave', requireDb, requireAuth, async (req,
     );
     await client.query(
       `UPDATE async_poker_games
-       SET state = $2,
+       SET host_user_id = $3,
+           status = $4,
+           state = $2,
            updated_at = NOW()
        WHERE id = $1`,
-      [gameId, withoutWaitingAsyncPokerUser(state, req.session.userId)]
+      [gameId, withoutWaitingAsyncPokerUser(state, req.session.userId), nextHostUserId, nextStatus]
     );
     await client.query(
       `INSERT INTO async_poker_actions (game_id, user_id, hand_number, action, note)
@@ -2678,7 +2703,7 @@ app.post('/api/async-poker/games/:id/leave', requireDb, requireAuth, async (req,
         gameId,
         req.session.userId,
         game.hand_number,
-        game.status === 'active' ? 'Left before being dealt into the next hand' : 'Left the table',
+        leaveNote,
       ]
     );
     await client.query('COMMIT');
