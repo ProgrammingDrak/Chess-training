@@ -2552,12 +2552,13 @@ button {
 
 .async-hand-complete-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(130px, auto);
+  grid-template-columns: minmax(160px, 0.9fr) minmax(260px, 1.35fr) minmax(130px, auto);
   gap: 12px;
   align-items: start;
 }
 
 .async-hand-complete-head > div,
+.async-hand-board-summary,
 .async-hand-complete-pot,
 .async-summary-stat {
   min-width: 0;
@@ -2567,6 +2568,7 @@ button {
 }
 
 .async-hand-complete-head span,
+.async-hand-board-summary > span,
 .async-summary-stat span {
   color: var(--text-muted);
   font-size: 0.68rem;
@@ -2584,10 +2586,32 @@ button {
 
 .async-hand-complete-head em,
 .async-hand-complete-head small,
+.async-hand-board-summary em,
 .async-summary-stat small {
   color: var(--text-muted);
   font-size: 0.72rem;
   font-style: normal;
+}
+
+.async-hand-board-streets {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.async-hand-board-street {
+  min-width: 58px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.async-hand-board-cards {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .async-hand-summary-grid {
