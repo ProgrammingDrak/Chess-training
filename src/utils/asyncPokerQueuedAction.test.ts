@@ -65,6 +65,21 @@ describe('async poker queued actions', () => {
     });
   });
 
+  it('honors an explicit queued fold even when checking is free', () => {
+    expect(prepare({ action: 'fold' }, {
+      street: 'preflop',
+      actions: [],
+      foldedUserIds: [],
+    })).toEqual({
+      action: 'fold',
+      amountChips: null,
+    });
+    expect(normalizeAsyncPokerQueuedAction({ action: 'fold' })).toMatchObject({
+      action: 'fold',
+      amountChips: null,
+    });
+  });
+
   it('allows an all-in call cap to call up to the remaining stack', () => {
     expect(prepare({ raiseToChips: 100, callCapMode: 'all_in' }, baseState(200))).toEqual({
       action: 'call',

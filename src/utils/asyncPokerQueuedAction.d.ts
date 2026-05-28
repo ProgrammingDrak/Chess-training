@@ -1,7 +1,7 @@
 import type { LiveHandAction } from '../types/liveSession';
 
 export interface AsyncPokerQueuedActionPlan {
-  action?: 'call' | 'raise';
+  action?: 'call' | 'raise' | 'fold';
   amountChips?: number | null;
   raiseToChips?: number | null;
   callCapChips?: number | null;

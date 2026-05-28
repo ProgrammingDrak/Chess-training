@@ -121,6 +121,8 @@ function actionAnimationLabel(action: AsyncPokerRecentAction['action']): string 
 }
 
 function queuedActionDescription(action: AsyncPokerQueuedAction): string {
+  if (action.action === 'fold') return `Fold on ${streetLabel(action.street).toLowerCase()}`;
+
   const parts: string[] = [];
   const raiseToChips = typeof action.raiseToChips === 'number' && Number.isInteger(action.raiseToChips)
     ? action.raiseToChips
@@ -986,7 +988,14 @@ function GameCard({
   const heroSummary = heroPlayer && heroHasCards ? actionSummary(liveActions, currentStreet, heroPlayer.seatIndex) : null;
   const pendingAction = game.state.pendingActions?.[String(effectiveUserId)] ?? null;
   const foldedUserIds = new Set((game.state.foldedUserIds ?? []).map(Number));
+  const pendingFoldUserIds = new Set(
+    Object.entries(game.state.pendingActions ?? {})
+      .filter(([, action]) => action.action === 'fold')
+      .map(([userId]) => Number(userId))
+      .filter(Number.isFinite)
+  );
   const heroFolded = foldedUserIds.has(effectiveUserId);
+  const heroPendingFold = pendingFoldUserIds.has(effectiveUserId);
   const canPreDecide = game.status === 'active' && heroHasCards && (game.isPlayer || Boolean(controlledNpc)) && !isCurrentPlayer && !heroFolded && Boolean(heroPlayer);
   const preDecisionCallDefaultAmount = heroSummary?.canCall
     ? Math.round(heroSummary.toCallBB * game.bigBlindChips)
@@ -998,7 +1007,7 @@ function GameCard({
       Math.round((heroSummary?.minRaiseToBB ?? 0) * game.bigBlindChips)
     );
   const foldedSeatIds = game.players
-    .filter((player) => foldedUserIds.has(player.userId))
+    .filter((player) => foldedUserIds.has(player.userId) || pendingFoldUserIds.has(player.userId))
     .map((player) => player.seatIndex);
   const dealtSeatIds = game.status === 'active' ? currentHandSeats : [];
   const burnPileCount = foldedSeatIds.length * 2;
@@ -1088,6 +1097,20 @@ function GameCard({
     });
   };
 
+  const savePreFold = () => {
+    void run('pre-fold', async () => {
+      await onQueueAction(game.id, {
+        action: 'fold',
+        amountChips: null,
+        raiseToChips: null,
+        callCapChips: null,
+        callCapMode: 'amount',
+        note: null,
+        ...(controlledNpc ? { actorUserId: controlledNpc.userId } : {}),
+      });
+    });
+  };
+
   const clearPreDecision = () => {
     void run('clear-pre-decision', () => onClearQueuedAction(game.id, controlledNpc?.userId));
   };
@@ -1117,7 +1140,9 @@ function GameCard({
   };
 
   const handleLeaveTable = () => {
-    const leaveMessage = heroHasCards
+    const leaveMessage = heroPendingFold
+      ? `Leave ${game.name}? Your queued fold will post when your turn arrives.`
+      : heroHasCards
       ? `Leave ${game.name}? If you are still in this hand, finish or fold the hand before your seat can open up.`
       : `Leave ${game.name}? Your seat will open up for another player.`;
     if (!window.confirm(leaveMessage)) return;
@@ -1319,15 +1344,25 @@ function GameCard({
 
           <div className="async-predecision-actions">
             <span>
-              {[
-                preDecisionRaiseAmount ? `${heroSummary?.canBet ? 'Bet' : 'Raise'} to ${preDecisionRaiseAmount} chips` : null,
-                preDecisionCallAllIn
-                  ? 'Call up to all in'
-                  : preDecisionCallDefaultAmount > 0
-                    ? `Call up to ${preDecisionCallAmount || preDecisionCallDefaultAmount} chips`
-                    : 'Check if free',
-              ].filter(Boolean).join('; ')}
+              {heroPendingFold
+                ? 'Fold queued privately; it will post when your turn arrives'
+                : [
+                  preDecisionRaiseAmount ? `${heroSummary?.canBet ? 'Bet' : 'Raise'} to ${preDecisionRaiseAmount} chips` : null,
+                  preDecisionCallAllIn
+                    ? 'Call up to all in'
+                    : preDecisionCallDefaultAmount > 0
+                      ? `Call up to ${preDecisionCallAmount || preDecisionCallDefaultAmount} chips`
+                      : 'Check if free',
+                ].filter(Boolean).join('; ')}
             </span>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={Boolean(busy)}
+              onClick={savePreFold}
+            >
+              {busy === 'pre-fold' ? 'Folding...' : 'Fold when turn arrives'}
+            </button>
             <button
               type="button"
               className="btn-primary"
