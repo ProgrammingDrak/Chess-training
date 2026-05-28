@@ -345,6 +345,33 @@ async function initSchema(pool) {
   console.log('[db] Schema initialized');
 }
 
+async function ensureAsyncPokerActionConstraint(pool) {
+  const tableCheck = await pool.query("SELECT to_regclass('public.async_poker_actions') AS table_name");
+  if (!tableCheck.rows[0]?.table_name) return;
+
+  const { rows } = await pool.query(`
+    SELECT pg_get_constraintdef(c.oid) AS definition
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE n.nspname = 'public'
+      AND t.relname = 'async_poker_actions'
+      AND c.conname = 'async_poker_actions_action_check'
+  `);
+  const definition = rows[0]?.definition ?? '';
+  if (definition.includes("'leave'")) return;
+
+  await pool.query(`
+    ALTER TABLE async_poker_actions
+      DROP CONSTRAINT IF EXISTS async_poker_actions_action_check;
+
+    ALTER TABLE async_poker_actions
+      ADD CONSTRAINT async_poker_actions_action_check
+      CHECK (action IN ('check', 'call', 'bet', 'raise', 'fold', 'pass', 'timeout', 'join', 'leave', 'start', 'end', 'ready_next', 'show'));
+  `);
+  console.log("[db] Async poker action constraint allows 'leave'");
+}
+
 // ── DB health tracking ────────────────────────────────────────────────────────
 //
 // The session store and route handlers share a single connection pool.  We
@@ -377,6 +404,7 @@ async function checkDbHealth(pool) {
     if (!schemaInitialized) {
       try {
         await initSchema(pool);
+        await ensureAsyncPokerActionConstraint(pool);
         schemaInitialized = true;
       } catch (err) {
         console.error('[db] Schema init failed (will retry on next health check):', err.message);
@@ -3818,6 +3846,7 @@ async function start() {
   if (dbConfigured && dbHealthy) {
     try {
       await initSchema(pool);
+      await ensureAsyncPokerActionConstraint(pool);
       schemaInitialized = true;
     } catch (err) {
       console.error('[db] Schema init failed — will retry lazily:', err.message);
