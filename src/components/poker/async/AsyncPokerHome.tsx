@@ -82,6 +82,7 @@ function actionLabel(action: AsyncPokerRecentAction['action']) {
   if (action === 'post-blind') return 'Blind';
   if (action === 'post-straddle') return 'Straddle';
   if (action === 'join') return 'joined';
+  if (action === 'leave') return 'left table';
   if (action === 'start') return 'started game';
   if (action === 'end') return 'ended table';
   if (action === 'ready_next') return 'ready next';
@@ -92,7 +93,7 @@ function actionLabel(action: AsyncPokerRecentAction['action']) {
 }
 
 function actionTone(action: AsyncPokerRecentAction['action']) {
-  if (action === 'join' || action === 'start' || action === 'end') return 'table';
+  if (action === 'join' || action === 'leave' || action === 'start' || action === 'end') return 'table';
   if (action === 'fold' || action === 'timeout') return 'quiet';
   if (action === 'bet' || action === 'raise') return 'aggressive';
   return 'neutral';
@@ -854,6 +855,7 @@ function GameCard({
   currentUserId,
   profiles,
   onJoin,
+  onLeave,
   onAddNpc,
   onStart,
   onEnd,
@@ -868,6 +870,7 @@ function GameCard({
   currentUserId: number;
   profiles: PlayerProfile[];
   onJoin: (gameId: string) => Promise<void>;
+  onLeave: (gameId: string) => Promise<void>;
   onAddNpc: (gameId: string, input?: { name?: string; seatIndex?: number }) => Promise<void>;
   onStart: (gameId: string) => Promise<void>;
   onEnd: (gameId: string) => Promise<void>;
@@ -943,6 +946,7 @@ function GameCard({
   const potBB = Math.max(game.potChips / Math.max(1, game.bigBlindChips), totalPotBB(liveActions));
   const heroPlayer = game.players.find((player) => player.userId === effectiveUserId) ?? null;
   const heroHasCards = heroHoleCards.length > 0;
+  const canLeave = game.isPlayer && !isHost && (game.status === 'waiting' || !heroHasCards);
   const heroSummary = heroPlayer && heroHasCards ? actionSummary(liveActions, currentStreet, heroPlayer.seatIndex) : null;
   const pendingAction = game.state.pendingActions?.[String(effectiveUserId)] ?? null;
   const foldedUserIds = new Set((game.state.foldedUserIds ?? []).map(Number));
@@ -1074,6 +1078,11 @@ function GameCard({
   const handleEndTable = () => {
     if (!window.confirm(`End ${game.name}? Players will no longer be able to act at this table.`)) return;
     void run('end', () => onEnd(game.id));
+  };
+
+  const handleLeaveTable = () => {
+    if (!window.confirm(`Leave ${game.name}? Your seat will open up for another player.`)) return;
+    void run('leave', () => onLeave(game.id));
   };
 
   const handleSeatTap = (seatId: number) => {
@@ -1277,6 +1286,11 @@ function GameCard({
         {canJoin && (
           <button className="btn-primary" disabled={Boolean(busy)} onClick={() => run('join', () => onJoin(game.id))}>
             {busy === 'join' ? 'Joining...' : game.status === 'active' ? 'Join next hand' : 'Join'}
+          </button>
+        )}
+        {canLeave && (
+          <button className="btn-secondary" disabled={Boolean(busy)} onClick={handleLeaveTable}>
+            {busy === 'leave' ? 'Leaving...' : 'Leave table'}
           </button>
         )}
         {canStart && (
@@ -1692,6 +1706,7 @@ export function AsyncPokerHome({
               currentUserId={user.id}
               profiles={profiles}
               onJoin={asyncPoker.joinGame}
+              onLeave={asyncPoker.leaveGame}
               onAddNpc={asyncPoker.addNpc}
               onStart={asyncPoker.startGame}
               onEnd={asyncPoker.endGame}

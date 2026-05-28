@@ -86,7 +86,7 @@ export interface AsyncPokerRecentAction {
   userId: number;
   username: string;
   handNumber: number;
-  action: AsyncPokerAction | 'post-blind' | 'post-straddle' | 'timeout' | 'join' | 'start' | 'end' | 'ready_next' | 'show';
+  action: AsyncPokerAction | 'post-blind' | 'post-straddle' | 'timeout' | 'join' | 'leave' | 'start' | 'end' | 'ready_next' | 'show';
   street: Exclude<AsyncPokerStreet, 'showdown'>;
   amountChips: number | null;
   note: string | null;

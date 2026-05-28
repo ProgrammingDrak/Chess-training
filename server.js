@@ -1314,6 +1314,15 @@ function withoutPendingAsyncPokerAction(state, userId) {
   return { ...state, pendingActions };
 }
 
+function withoutWaitingAsyncPokerUser(state, userId) {
+  const id = Number(userId);
+  return {
+    ...withoutPendingAsyncPokerAction(state, id),
+    nextHandReadyUserIds: (state.nextHandReadyUserIds ?? []).map(Number).filter((value) => value !== id),
+    pendingBigBlindUserIds: (state.pendingBigBlindUserIds ?? []).map(Number).filter((value) => value !== id),
+  };
+}
+
 function isAsyncPokerPlayerInCurrentHand(player, state) {
   const cards = state.holeCards?.[String(player?.user_id)];
   return player?.status === 'active' && Array.isArray(cards) && cards.length > 0;
@@ -2568,6 +2577,89 @@ app.post('/api/async-poker/games/:id/join', requireDb, requireAuth, async (req, 
     await client.query('ROLLBACK').catch(() => {});
     console.error('[async-poker] join error:', err);
     res.status(500).json({ error: 'Failed to join game' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/async-poker/games/:id/leave', requireDb, requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const gameId = req.params.id;
+    if (!isValidUuid(gameId)) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+
+    await client.query('BEGIN');
+    const { rows: gameRows } = await client.query(
+      `SELECT id, host_user_id, status, hand_number, state
+       FROM async_poker_games
+       WHERE id = $1
+       FOR UPDATE`,
+      [gameId]
+    );
+    const game = gameRows[0];
+    if (!game) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Game not found' });
+    }
+    if (Number(game.host_user_id) === Number(req.session.userId)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Hosts can end the table instead of leaving it' });
+    }
+    if (!['waiting', 'active'].includes(game.status)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This table is no longer open' });
+    }
+
+    const { rows: playerRows } = await client.query(
+      `SELECT user_id, seat_index, status
+       FROM async_poker_game_players
+       WHERE game_id = $1 AND user_id = $2`,
+      [gameId, req.session.userId]
+    );
+    const player = playerRows[0];
+    if (!player) {
+      await client.query('COMMIT');
+      const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+      return res.json({ game: updated });
+    }
+
+    const state = normalizeAsyncPokerHandState(game.state);
+    if (game.status === 'active' && isAsyncPokerPlayerInCurrentHand(player, state)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Finish this hand before leaving the table' });
+    }
+
+    await client.query(
+      `DELETE FROM async_poker_game_players
+       WHERE game_id = $1 AND user_id = $2`,
+      [gameId, req.session.userId]
+    );
+    await client.query(
+      `UPDATE async_poker_games
+       SET state = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [gameId, withoutWaitingAsyncPokerUser(state, req.session.userId)]
+    );
+    await client.query(
+      `INSERT INTO async_poker_actions (game_id, user_id, hand_number, action, note)
+       VALUES ($1, $2, $3, 'leave', $4)`,
+      [
+        gameId,
+        req.session.userId,
+        game.hand_number,
+        game.status === 'active' ? 'Left before being dealt into the next hand' : 'Left the table',
+      ]
+    );
+    await client.query('COMMIT');
+    const updated = await getAsyncPokerGameForUser(gameId, req.session.userId);
+    res.json({ game: updated });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[async-poker] leave error:', err);
+    res.status(500).json({ error: 'Failed to leave table' });
   } finally {
     client.release();
   }

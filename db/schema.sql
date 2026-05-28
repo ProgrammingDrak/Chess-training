@@ -270,7 +270,7 @@ CREATE TABLE IF NOT EXISTS async_poker_actions (
   user_id      INTEGER NOT NULL,
   hand_number  INTEGER NOT NULL DEFAULT 1,
   action       VARCHAR(20) NOT NULL
-    CHECK (action IN ('check', 'call', 'bet', 'raise', 'fold', 'pass', 'timeout', 'join', 'start', 'end', 'ready_next', 'show')),
+    CHECK (action IN ('check', 'call', 'bet', 'raise', 'fold', 'pass', 'timeout', 'join', 'leave', 'start', 'end', 'ready_next', 'show')),
   street       VARCHAR(20) NOT NULL DEFAULT 'preflop'
     CHECK (street IN ('preflop', 'flop', 'turn', 'river')),
   amount_chips INTEGER CHECK (amount_chips IS NULL OR amount_chips >= 0),
@@ -285,7 +285,7 @@ ALTER TABLE async_poker_actions
   DROP CONSTRAINT IF EXISTS async_poker_actions_action_check;
 ALTER TABLE async_poker_actions
   ADD CONSTRAINT async_poker_actions_action_check
-  CHECK (action IN ('check', 'call', 'bet', 'raise', 'fold', 'pass', 'timeout', 'join', 'start', 'end', 'ready_next', 'show'));
+  CHECK (action IN ('check', 'call', 'bet', 'raise', 'fold', 'pass', 'timeout', 'join', 'leave', 'start', 'end', 'ready_next', 'show'));
 DO $$
 BEGIN
   ALTER TABLE async_poker_actions

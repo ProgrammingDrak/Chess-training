@@ -47,6 +47,10 @@ export function useAsyncPoker(enabled: boolean) {
     });
   }, []);
 
+  const removeGame = useCallback((gameId: string) => {
+    setGames((current) => current.filter((item) => item.id !== gameId));
+  }, []);
+
   const refresh = useCallback(async () => {
     if (!enabled) return;
     setLoading(true);
@@ -104,6 +108,20 @@ export function useAsyncPoker(enabled: boolean) {
     if (!res.ok || !data.game) throw new Error(data.error ?? 'Failed to join game');
     replaceGame(data.game);
   }, [replaceGame]);
+
+  const leaveGame = useCallback(async (gameId: string) => {
+    const res = await fetch(`/api/async-poker/games/${encodeURIComponent(gameId)}/leave`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+    const data = await readJson<AsyncPokerPayload>(res, 'Failed to leave table');
+    if (!res.ok) throw new Error(data.error ?? 'Failed to leave table');
+    if (data.game) {
+      replaceGame(data.game);
+    } else {
+      removeGame(gameId);
+    }
+  }, [removeGame, replaceGame]);
 
   const addNpc = useCallback(async (gameId: string, input?: { name?: string; seatIndex?: number }) => {
     const res = await fetch(`/api/async-poker/games/${encodeURIComponent(gameId)}/npcs`, {
@@ -233,6 +251,7 @@ export function useAsyncPoker(enabled: boolean) {
     refresh,
     createGame,
     joinGame,
+    leaveGame,
     addNpc,
     startGame,
     endGame,
