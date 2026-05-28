@@ -164,12 +164,26 @@ type AsyncHandParticipantSummary = {
   statusLabel: string;
 };
 
+type AsyncBoardStreetSummary = {
+  label: 'Flop' | 'Turn' | 'River';
+  cards: Card[];
+};
+
 function resultForHand(game: AsyncPokerGame, handNumber: number): AsyncResolvedHandResult | null {
   return game.state.previousHandResult?.handNumber === handNumber
     ? game.state.previousHandResult
     : game.state.resolvedAt && game.handNumber === handNumber
       ? game.state
       : null;
+}
+
+function boardStreetSummaries(result: AsyncResolvedHandResult | null): AsyncBoardStreetSummary[] {
+  const board = result?.board ?? [];
+  return [
+    { label: 'Flop', cards: board.slice(0, 3) },
+    { label: 'Turn', cards: board.slice(3, 4) },
+    { label: 'River', cards: board.slice(4, 5) },
+  ];
 }
 
 function resultSummaryForHand(
@@ -460,6 +474,7 @@ function AsyncActionHistory({ game }: { game: AsyncPokerGame }) {
     const isHandOver = hand.handNumber < game.handNumber || Boolean(game.state.resolvedAt && hand.handNumber === game.handNumber) || Boolean(resultSummary?.winnerIds.length);
     const resultPotChips = resultSummary?.potChips ?? handChips;
     const resultPotBB = resultPotChips / Math.max(1, game.bigBlindChips);
+    const boardSummary = boardStreetSummaries(handResult);
     const participantSummaries = isHandOver
       ? participantSummariesForHand(game, hand.bettingActions, handResult, positions)
       : [];
@@ -488,6 +503,27 @@ function AsyncActionHistory({ game }: { game: AsyncPokerGame }) {
                     : 'Winner not recorded'}
                 </strong>
                 {resultSummary?.showdownLabel && <em>{resultSummary.showdownLabel}</em>}
+              </div>
+              <div className="async-hand-board-summary" aria-label={`Hand ${hand.handNumber} board`}>
+                <span>Board</span>
+                <div className="async-hand-board-streets">
+                  {boardSummary.map((street) => (
+                    <div key={`${hand.handNumber}-${street.label}`} className="async-hand-board-street">
+                      <small>{street.label}</small>
+                      <div className="async-hand-board-cards">
+                        {street.cards.length > 0
+                          ? street.cards.map((card, cardIndex) => (
+                            <PlayingCard
+                              key={`${hand.handNumber}-${street.label}-${card.rank}${card.suit}-${cardIndex}`}
+                              card={card}
+                              size="sm"
+                            />
+                          ))
+                          : <em>Not dealt</em>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
               <div className="async-hand-complete-pot">
                 <span>Pot won</span>
