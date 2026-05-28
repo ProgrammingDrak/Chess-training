@@ -109,10 +109,12 @@ export function useAsyncPoker(enabled: boolean) {
     replaceGame(data.game);
   }, [replaceGame]);
 
-  const leaveGame = useCallback(async (gameId: string) => {
+  const leaveGame = useCallback(async (gameId: string, input?: { foldAndLeave?: boolean }) => {
     const res = await fetch(`/api/async-poker/games/${encodeURIComponent(gameId)}/leave`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
+      body: JSON.stringify(input ?? {}),
     });
     const data = await readJson<AsyncPokerPayload>(res, 'Failed to leave table');
     if (!res.ok) throw new Error(data.error ?? 'Failed to leave table');

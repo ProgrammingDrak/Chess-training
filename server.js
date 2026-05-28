@@ -1367,6 +1367,26 @@ function withPendingAsyncPokerLeave(state, userId) {
   };
 }
 
+function withPendingAsyncPokerFold(state, userId, { handNumber, street, note = null }) {
+  return {
+    ...state,
+    pendingActions: {
+      ...(state.pendingActions ?? {}),
+      [String(userId)]: {
+        action: 'fold',
+        amountChips: null,
+        raiseToChips: null,
+        callCapChips: null,
+        callCapMode: 'amount',
+        handNumber,
+        street,
+        note,
+        createdAt: new Date().toISOString(),
+      },
+    },
+  };
+}
+
 function withoutPendingAsyncPokerLeave(state, userId) {
   const id = Number(userId);
   return {
@@ -2672,10 +2692,11 @@ app.post('/api/async-poker/games/:id/leave', requireDb, requireAuth, async (req,
     if (!isValidUuid(gameId)) {
       return res.status(404).json({ error: 'Game not found' });
     }
+    const foldAndLeave = req.body?.foldAndLeave === true;
 
     await client.query('BEGIN');
     const { rows: gameRows } = await client.query(
-      `SELECT id, host_user_id, status, hand_number, state
+      `SELECT id, host_user_id, status, current_player_user_id, hand_number, state
        FROM async_poker_games
        WHERE id = $1
        FOR UPDATE`,
@@ -2708,7 +2729,7 @@ app.post('/api/async-poker/games/:id/leave', requireDb, requireAuth, async (req,
     const state = normalizeAsyncPokerHandState(game.state);
     const playerInCurrentHand = game.status === 'active' && isAsyncPokerPlayerInCurrentHand(player, state);
     const leavingAfterQueuedFold = playerInCurrentHand && hasPendingAsyncPokerFold(state, req.session.userId);
-    if (playerInCurrentHand && !leavingAfterQueuedFold) {
+    if (playerInCurrentHand && !leavingAfterQueuedFold && !foldAndLeave) {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Finish this hand before leaving the table' });
     }
@@ -2739,7 +2760,17 @@ app.post('/api/async-poker/games/:id/leave', requireDb, requireAuth, async (req,
       }
     }
 
-    if (leavingAfterQueuedFold && nextStatus !== 'finished') {
+    if (playerInCurrentHand && (leavingAfterQueuedFold || foldAndLeave) && nextStatus !== 'finished') {
+      const stateWithPendingLeave = withPendingAsyncPokerLeave(
+        foldAndLeave
+          ? withPendingAsyncPokerFold(state, req.session.userId, {
+            handNumber: game.hand_number,
+            street: state.street,
+            note: 'Folded before leaving the table',
+          })
+          : state,
+        req.session.userId
+      );
       await client.query(
         `UPDATE async_poker_games
          SET host_user_id = $3,
@@ -2747,8 +2778,25 @@ app.post('/api/async-poker/games/:id/leave', requireDb, requireAuth, async (req,
              state = $2,
              updated_at = NOW()
          WHERE id = $1`,
-        [gameId, withPendingAsyncPokerLeave(state, req.session.userId), nextHostUserId, nextStatus]
+        [gameId, stateWithPendingLeave, nextHostUserId, nextStatus]
       );
+      if (Number(game.current_player_user_id) === Number(req.session.userId)) {
+        await client.query(
+          `INSERT INTO async_poker_actions (game_id, user_id, hand_number, action, street, amount_chips, note)
+           VALUES ($1, $2, $3, 'fold', $4, NULL, $5)`,
+          [gameId, req.session.userId, game.hand_number, state.street, 'Folded before leaving the table']
+        );
+        await markAsyncPokerTurnNotificationsRead(client, {
+          gameId,
+          userId: req.session.userId,
+        });
+        const nextPlayerId = await advanceAsyncPokerTurn(client, gameId, req.session.userId, { name: 'fold', amountChips: null });
+        const settledPlayerId = await settleAsyncPokerNpcTurns(client, gameId);
+        const notifyPlayerId = settledPlayerId ?? nextPlayerId;
+        if (notifyPlayerId) {
+          await notifyAsyncPokerTurn(client, gameId, notifyPlayerId);
+        }
+      }
       await client.query('COMMIT');
       return res.json({ game: null });
     }
