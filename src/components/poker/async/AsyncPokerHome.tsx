@@ -908,7 +908,7 @@ function GameCard({
   currentUserId: number;
   profiles: PlayerProfile[];
   onJoin: (gameId: string) => Promise<void>;
-  onLeave: (gameId: string) => Promise<void>;
+  onLeave: (gameId: string, input?: { foldAndLeave?: boolean }) => Promise<void>;
   onAddNpc: (gameId: string, input?: { name?: string; seatIndex?: number }) => Promise<void>;
   onStart: (gameId: string) => Promise<void>;
   onEnd: (gameId: string) => Promise<void>;
@@ -1140,13 +1140,14 @@ function GameCard({
   };
 
   const handleLeaveTable = () => {
-    const leaveMessage = heroPendingFold
-      ? `Leave ${game.name}? Your queued fold will post when your turn arrives.`
-      : heroHasCards
-      ? `Leave ${game.name}? If you are still in this hand, finish or fold the hand before your seat can open up.`
-      : `Leave ${game.name}? Your seat will open up for another player.`;
+    const foldAndLeave = heroHasCards && !heroFolded && !heroPendingFold;
+    const leaveMessage = foldAndLeave
+      ? `Fold and leave ${game.name}? Your fold will post when your turn arrives, and your seat will open automatically.`
+      : heroPendingFold
+        ? `Leave ${game.name}? Your queued fold will post when your turn arrives.`
+        : `Leave ${game.name}? Your seat will open up for another player.`;
     if (!window.confirm(leaveMessage)) return;
-    void run('leave', () => onLeave(game.id));
+    void run('leave', () => onLeave(game.id, foldAndLeave ? { foldAndLeave: true } : undefined));
   };
 
   const handleSeatTap = (seatId: number) => {
