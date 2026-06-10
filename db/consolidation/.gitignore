@@ -1,0 +1,9 @@
+# Raw dumps and the data file contain real user data (password hashes, session
+# blobs, etc.). Never commit them. Regenerate with build-migration.sh.
+_raw_schema.sql
+_raw_data.sql
+02_data_gto.sql
+# Point-in-time backups of the live hub gto schema (full schema+data dump).
+archive_gto_*.sql
+# Archived data dumps (real user data); keep archive/MANIFEST.md committable.
+archive/*.sql
