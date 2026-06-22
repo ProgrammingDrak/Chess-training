@@ -12,8 +12,18 @@ const needsSsl =
   connectionString?.includes('supabase.com') ||
   connectionString?.includes('sslmode=require');
 
+// Which Postgres schema this app's tables live in. On a dedicated database this
+// is just `public`. On the shared Supabase project (daily-command-center) the
+// GTO tables live in their own `gto` schema so generic names (users, sessions,
+// …) don't collide with the other apps. Set via DB_SCHEMA. We pin search_path
+// through the libpq `options` startup parameter rather than a connect handler so
+// it is applied before any query runs (no race) and survives the pooler.
+const dbSchema = (process.env.DB_SCHEMA || 'public').trim();
+const searchPath = dbSchema === 'public' ? 'public' : `${dbSchema},public`;
+
 const pool = new Pool({
   connectionString,
+  options: `-c search_path=${searchPath}`,
   connectionTimeoutMillis: 5000,
   ...(needsSsl && {
     ssl: { rejectUnauthorized: false },
