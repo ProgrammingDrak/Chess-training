@@ -1846,7 +1846,8 @@ async function settleAsyncPokerNpcTurns(db, gameId) {
   for (let step = 0; step < 24; step += 1) {
     const { rows: gameRows } = await db.query(
         `SELECT g.id, g.status, g.current_player_user_id, g.state, g.hand_number, g.big_blind_chips,
-              (current_player_npc.user_id IS NOT NULL) AS current_player_is_npc
+              (current_player_npc.user_id IS NOT NULL) AS current_player_is_npc,
+              (g.current_turn_expires_at IS NOT NULL AND g.current_turn_expires_at <= NOW()) AS turn_expired
        FROM async_poker_games g
        LEFT JOIN users current_player ON current_player.id = g.current_player_user_id
        LEFT JOIN async_poker_npc_users current_player_npc ON current_player_npc.user_id = current_player.id
@@ -1899,6 +1900,11 @@ async function settleAsyncPokerNpcTurns(db, gameId) {
       amountChips = summary.canCall ? Math.min(actor.stack_chips, callChips) : null;
       action = summary.canCall ? 'call' : 'check';
       note = 'NPC acted automatically';
+    } else if (game.turn_expired) {
+      action = 'timeout';
+      amountChips = null;
+      note = 'Auto-folded: turn timer expired';
+      await markAsyncPokerTurnNotificationsRead(db, { gameId, userId: actor.user_id });
     } else {
       return finalPlayerId;
     }
@@ -1916,7 +1922,8 @@ async function settleAsyncPokerNpcTurns(db, gameId) {
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [gameId, actor.user_id, game.hand_number, action, state.street, amountChips, note]
     );
-    finalPlayerId = await advanceAsyncPokerTurn(db, gameId, actor.user_id, { name: action, amountChips });
+    const engineAction = action === 'timeout' ? 'fold' : action;
+    finalPlayerId = await advanceAsyncPokerTurn(db, gameId, actor.user_id, { name: engineAction, amountChips });
   }
   return finalPlayerId;
 }
@@ -1932,6 +1939,7 @@ async function settleVisibleAsyncPokerNpcTurns(db, userId) {
        AND (
          current_player_npc.user_id IS NOT NULL
          OR (COALESCE(g.state->'pendingActions', '{}'::jsonb) ? g.current_player_user_id::text)
+         OR (g.current_turn_expires_at IS NOT NULL AND g.current_turn_expires_at <= NOW())
        )
        AND (
          g.host_user_id = $1

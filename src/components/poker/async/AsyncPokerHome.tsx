@@ -1583,6 +1583,26 @@ export function AsyncPokerHome({
     return () => window.clearTimeout(timer);
   }, [asyncPoker.refresh, hasHostedNpcTurn]);
 
+  // When the soonest active turn timer is about to lapse, refresh so the server
+  // posts the auto-fold promptly. Longer timers are covered by the 60s poll.
+  useEffect(() => {
+    const soonestExpiry = asyncPoker.games
+      .filter((game) => game.status === 'active' && game.currentTurnExpiresAt)
+      .reduce<number | null>((soonest, game) => {
+        const expiresAt = new Date(game.currentTurnExpiresAt as string).getTime();
+        if (!Number.isFinite(expiresAt)) return soonest;
+        return soonest === null ? expiresAt : Math.min(soonest, expiresAt);
+      }, null);
+    if (soonestExpiry === null) return undefined;
+    const msUntilExpiry = soonestExpiry - Date.now();
+    if (msUntilExpiry > 60_000) return undefined;
+    const delay = Math.max(1_000, msUntilExpiry + 500);
+    const timer = window.setTimeout(() => {
+      void asyncPoker.refresh();
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [asyncPoker.refresh, asyncPoker.games]);
+
   useEffect(() => {
     if (!activeGameId) return;
     if (!openGames.some((game) => game.id === activeGameId)) {
