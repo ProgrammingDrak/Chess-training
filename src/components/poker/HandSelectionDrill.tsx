@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { HAND_SELECTION_SCENARIOS } from '../../data/poker';
 import { HandDisplay } from './HandDisplay';
 import { POSITION_FULL, classifyHandType } from '../../utils/poker';
@@ -19,9 +19,6 @@ const ACTIONS: { action: PokerAction; label: string; key: string }[] = [
 ];
 
 const ALL_POSITIONS: Position[] = ['UTG', 'HJ', 'CO', 'BTN', 'SB', 'BB'];
-
-const AUTO_ADVANCE_CORRECT_MS   = 700;
-const AUTO_ADVANCE_INCORRECT_MS = 1800;
 
 // Brief one-liner shown under the position name
 const POSITION_DESC: Record<Position, string> = {
@@ -132,8 +129,6 @@ export function HandSelectionDrill({ onRecordAttempt, onBack }: Props) {
   const [totalAnswered, setTotalAnswered] = useState(0);
   const [totalCorrect, setTotalCorrect]   = useState(0);
 
-  const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   // ── Filtered pool ──
   const pool = useMemo(() => {
     let scenarios = HAND_SELECTION_SCENARIOS;
@@ -155,7 +150,6 @@ export function HandSelectionDrill({ onRecordAttempt, onBack }: Props) {
     setTotalAnswered(0);
     setTotalCorrect(0);
     setStreak(0);
-    if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
   }, [pool]);
 
   useEffect(() => { buildQueue(); }, [buildQueue]);
@@ -164,7 +158,6 @@ export function HandSelectionDrill({ onRecordAttempt, onBack }: Props) {
 
   // ── Advance to next question ──
   const advance = useCallback(() => {
-    if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
     setAnswered(null);
     setQueueIndex((i) => {
       const next = i + 1;
@@ -187,13 +180,8 @@ export function HandSelectionDrill({ onRecordAttempt, onBack }: Props) {
       setTotalCorrect((n) => n + (isCorrect ? 1 : 0));
       setStreak((s) => (isCorrect ? s + 1 : 0));
       onRecordAttempt(currentScenario.id, isCorrect);
-
-      autoAdvanceTimer.current = setTimeout(
-        advance,
-        isCorrect ? AUTO_ADVANCE_CORRECT_MS : AUTO_ADVANCE_INCORRECT_MS,
-      );
     },
-    [currentScenario, answered, advance, onRecordAttempt],
+    [currentScenario, answered, onRecordAttempt],
   );
 
   // ── Keyboard shortcuts ──
@@ -203,17 +191,21 @@ export function HandSelectionDrill({ onRecordAttempt, onBack }: Props) {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       const key = e.key.toUpperCase();
-      if (key === 'F') handleAnswer('fold');
-      if (key === 'C') handleAnswer('call');
-      if (key === 'R') handleAnswer('raise');
-      if (answered !== null && key !== 'F' && key !== 'C' && key !== 'R') advance();
+      if (answered === null) {
+        if (key === 'F') handleAnswer('fold');
+        if (key === 'C') handleAnswer('call');
+        if (key === 'R') handleAnswer('raise');
+      } else {
+        // After answering, require a deliberate key to advance (not any key)
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') {
+          e.preventDefault();
+          advance();
+        }
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [handleAnswer, answered, advance]);
-
-  // ── Cleanup on unmount ──
-  useEffect(() => () => { if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current); }, []);
 
   // ── Derived ──
   const isAnswered = answered !== null;
@@ -482,22 +474,28 @@ export function HandSelectionDrill({ onRecordAttempt, onBack }: Props) {
               color: 'var(--text-secondary)',
               animation: 'fadeIn 0.1s ease',
             }}>
-              {isCorrect ? (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--green)' }}>✓ Correct</span>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>any key →</span>
-                </div>
-              ) : (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--red)' }}>
-                      ✗ Should be: {currentScenario.correctAction.toUpperCase()}
-                    </span>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>any key →</span>
-                  </div>
-                  <span>{currentScenario.explanation}</span>
-                </>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{
+                  fontWeight: 700,
+                  fontSize: '0.95rem',
+                  color: isCorrect ? 'var(--green)' : 'var(--red)',
+                }}>
+                  {isCorrect
+                    ? `✓ Correct — ${currentScenario.correctAction.toUpperCase()}`
+                    : `✗ Should be: ${currentScenario.correctAction.toUpperCase()}`}
+                </span>
+              </div>
+              <span>{currentScenario.explanation}</span>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+                <button
+                  className="btn-primary"
+                  onClick={advance}
+                  autoFocus
+                  style={{ padding: '8px 18px', fontSize: '0.9rem' }}
+                >
+                  Next <span style={{ fontSize: '0.7rem', opacity: 0.8, marginLeft: 6 }}>Space / →</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -521,7 +519,7 @@ export function HandSelectionDrill({ onRecordAttempt, onBack }: Props) {
               <span><kbd style={kbdStyle}>R</kbd> Raise</span>
             </>
           ) : (
-            <span>press any key to continue</span>
+            <span><kbd style={kbdStyle}>Space</kbd> or <kbd style={kbdStyle}>→</kbd> Next</span>
           )}
         </div>
       )}
