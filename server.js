@@ -1953,8 +1953,18 @@ async function settleVisibleAsyncPokerNpcTurns(db, userId) {
     [userId]
   );
   for (const row of rows) {
-    const nextPlayerId = await settleAsyncPokerNpcTurns(db, row.id);
-    if (nextPlayerId) await notifyAsyncPokerTurn(db, row.id, nextPlayerId);
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const nextPlayerId = await settleAsyncPokerNpcTurns(client, row.id);
+      if (nextPlayerId) await notifyAsyncPokerTurn(client, row.id, nextPlayerId);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 }
 
