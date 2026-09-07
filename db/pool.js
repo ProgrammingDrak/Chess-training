@@ -18,7 +18,7 @@ const needsSsl =
 // …) don't collide with the other apps. Set via DB_SCHEMA. We pin search_path
 // through the libpq `options` startup parameter rather than a connect handler so
 // it is applied before any query runs (no race) and survives the pooler.
-const dbSchema = (process.env.DB_SCHEMA || 'public').trim();
+const dbSchema = process.env.DB_SCHEMA?.trim() || 'public';
 const searchPath = dbSchema === 'public' ? 'public' : `${dbSchema},public`;
 
 const pool = new Pool({
